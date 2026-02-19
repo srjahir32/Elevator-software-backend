@@ -182,6 +182,7 @@ exports.PermissionRolesData = [
   { id: 76, role_id: 1, permission_id: 76 },
   { id: 77, role_id: 1, permission_id: 77 },
   { id: 78, role_id: 1, permission_id: 78 },
+  { id: 123, role_id: 1, permission_id: 79 }, // View Vender Order list
 
   // Manager (role_id: 3)
   { id: 79, role_id: 3, permission_id: 2 },  // View Project
