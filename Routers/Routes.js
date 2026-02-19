@@ -13,15 +13,19 @@ const PreInstallRouter = require("./PreInstall/PreInstallRoutes");
 const DeliveryFormRouter = require("./DeliveryForm/DeliveryFormRoutes");
 const MechanicalQCRouter = require("./Mechanical_QC/MechanicalQCRoutes");
 const ActivityLogsRouter = require("./ActivityLogs/LogsRoutes");
+const BranchRouter = require("./Branch/BranchRoutes");
 
 Routes.use("/auth", AuthRouter);
-Routes.use("/erector",ErectorRouter)
-Routes.use('/form',FormRouter)
-Routes.use('/payment',PaymentRouter)
-Routes.use('/project',ProjectRouter)
-Routes.use('/qc',QcRouter)
-Routes.use('/admin',AdminRouter)
-Routes.use('/vendor',VendorRouter)
+// ... existing lines
+Routes.use('/logs', ActivityLogsRouter);
+Routes.use('/branch', BranchRouter);
+Routes.use("/erector", ErectorRouter)
+Routes.use('/form', FormRouter)
+Routes.use('/payment', PaymentRouter)
+Routes.use('/project', ProjectRouter)
+Routes.use('/qc', QcRouter)
+Routes.use('/admin', AdminRouter)
+Routes.use('/vendor', VendorRouter)
 Routes.use('/elevator', ElevatorRouter);
 Routes.use('/pre_install', PreInstallRouter);
 Routes.use('/delivery_form', DeliveryFormRouter);

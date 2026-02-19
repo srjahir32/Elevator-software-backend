@@ -31,20 +31,23 @@ const GetAllActivityLogs = async (req, res) => {
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
 
-        // Same logic as elsewhere: Supervisors see only their projects
-        if (role && role.name === "Supervisor" || role.name === "Vapi_Purchase") {
+        // If not Admin, filter by user's assigned branches
+        if (role && role.name !== "Admin") {
           const user = await Users.findById(req.auth.id);
-          if (user && user.name) {
+          if (user && user.branches && user.branches.length > 0) {
             const allowedProjectIds = await Project.find({
-              Site_Supervisor: user.name,
+              branch_id: { $in: user.branches },
             }).distinct("_id");
 
-            // If supervisor has no projects, short-circuit with "no logs"
+            // If user has no projects in their branches, short-circuit with "no logs"
             if (allowedProjectIds.length === 0) {
               return ErrorHandler(res, 404, "No activity logs found");
             }
 
             logFilter.project_id = { $in: allowedProjectIds };
+          } else {
+            // User has no branches assigned, return no logs
+            return ErrorHandler(res, 404, "No activity logs found");
           }
         }
       }
@@ -156,11 +159,17 @@ async function getRoleBasedProjectIds(req) {
 
     if (userRole) {
       const role = await Roles.findOne({ id: userRole.role_id });
-      if (role && role.name === "Supervisor" || role.name === "Vapi_Purchase") {
+      const isAdmin = role && role.name === "Admin";
+
+      if (!isAdmin) {
         const user = await Users.findById(req.auth.id);
-        if (user && user.name) {
-          match.Site_Supervisor = user.name;
+        if (user) {
+          // If not admin, restrict by their assigned branches
+          match.branch_id = { $in: user.branches || [] };
         }
+      } else {
+        // If Admin and branchId is passed in the request (handled in caller), it's applied there.
+        // For Admin with no branchId, we return null to see all.
       }
     }
   }
@@ -177,23 +186,38 @@ async function getRoleBasedProjectIds(req) {
 
 const GetAllActivityLogsDashboard = async (req, res) => {
   try {
-    const page  = Math.max(parseInt(req.query.page)  || 1, 1);
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100);
-    const skip  = (page - 1) * limit;
+    const skip = (page - 1) * limit;
 
     // 🔒 Determine which projects this user is allowed to see
     const allowedProjectIds = await getRoleBasedProjectIds(req);
 
+    const branchId = req.query.branchId;
+    let finalProjectMatch = {};
+
+    if (allowedProjectIds) {
+      finalProjectMatch._id = { $in: allowedProjectIds };
+    }
+
+    if (branchId) {
+      finalProjectMatch.branch_id = new mongoose.Types.ObjectId(branchId);
+    }
+
+    // Get the IDs after applying both role-based and branch-based filters
+    const projectIds = await Project.find(finalProjectMatch).distinct("_id");
+
     // Build the ActivityLog filter
     const logFilter = {};
-    if (Array.isArray(allowedProjectIds)) {
-      if (allowedProjectIds.length === 0) {
-        // User has no assigned projects → return empty
-        return ErrorHandler(res, 200, "No activity logs found");
-      }
-      logFilter.project_id = { $in: allowedProjectIds };
+    if (projectIds.length === 0 && (allowedProjectIds !== null || branchId)) {
+      // User has no projects matching the filters → return empty
+      return ResponseOk(res, 200, "No activity logs found", []);
     }
-    // else null => no restriction, see all
+
+    if (projectIds.length > 0) {
+      logFilter.project_id = { $in: projectIds };
+    }
+    // else if projectIds is empty and NO restriction (isAdmin & no branchId), see all logs
 
     // Count with the same filter
     const totalCount = await ActivityLog.countDocuments(logFilter);

@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const { ErrorHandler, ResponseOk } = require('../../Utils/ResponseHandler');
 const { sendToken, sendRefreshToken } = require('../../Utils/TokenUtils');
 const { Users, User_Associate_With_Role } = require('../../Models/User.model')
-const {Project} = require('../../Models/Project.model')
+const { Project } = require('../../Models/Project.model')
 const { ActivityLog } = require('../../Models/Activitylog.model');
 require('dotenv').config();
 const { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } = require('../../config');
@@ -54,7 +54,7 @@ const RegisterUser = async (req, res) => {
 
 const LoginUser = async (req, res) => {
   const { email, password } = req.body;
-  
+
   if (!password || !email) {
     return ErrorHandler(res, 400, 'Password and email/phone number are required');
   }
@@ -90,7 +90,7 @@ const LoginUser = async (req, res) => {
       contact_number: user.contact_number,
       token,
       expiresin,
-      refresh_token, 
+      refresh_token,
       expirein
     });
 
@@ -135,43 +135,61 @@ const GetProfile = async (req, res) => {
           from: 'role_with_permissions',
           localField: 'role_id',
           foreignField: 'role_id',
-          as: 'role_permissions'
-        }
-      },
-      {
-        $unwind: {
-          path: '$role_permissions',
-          preserveNullAndEmptyArrays: true
+          as: 'role_permission_links'
         }
       },
       {
         $lookup: {
           from: 'permissions',
-          localField: 'role_permissions.permission_id',
-          foreignField: 'id',
-          as: 'permissions'
+          let: {
+            rolePermIds: { $ifNull: ["$role_permission_links.permission_id", []] },
+            userExtraPermIds: { $ifNull: ["$user.extra_permissions", []] }
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $in: ["$id", "$$rolePermIds"] },
+                    { $in: ["$id", "$$userExtraPermIds"] }
+                  ]
+                }
+              }
+            },
+            { $project: { permission_name: 1, _id: 0 } }
+          ],
+          as: 'all_permissions_list'
         }
       },
       {
-        $unwind: {
-          path: '$permissions',
-          preserveNullAndEmptyArrays: true
+        $lookup: {
+          from: 'branches',
+          localField: 'user.branches',
+          foreignField: '_id',
+          as: 'branches_data'
         }
       },
       {
-        $group: {
+        $project: {
           _id: '$user._id',
-          name: { $first: '$user.name' },
-          email: { $first: '$user.email' },
-          contact_number: { $first: '$user.contact_number' },
-          role: { $first: '$role.name' },
-          permissions: { $addToSet: '$permissions.permission_name' }
+          name: '$user.name',
+          email: '$user.email',
+          contact_number: '$user.contact_number',
+          role: '$role.name',
+          permissions: '$all_permissions_list.permission_name',
+          branches: {
+            $map: {
+              input: '$branches_data',
+              as: 'b',
+              in: { id: '$$b._id', name: '$$b.name' }
+            }
+          }
         }
       }
     ]);
 
-    const ProjectCount= await Project.countDocuments()
-    console.log("ProjectCount",ProjectCount)
+    const ProjectCount = await Project.countDocuments()
+    console.log("ProjectCount", ProjectCount)
 
     const updated_data = {
       ...userData[0],
@@ -271,22 +289,22 @@ const GetAccessToken = async (req, res) => {
     let newRefreshToken;
     user = await Users.findOne({ _id: decoded.id });
 
- 
-      newAccessToken = await sendToken({ id: user._id, email: user.email, contact_number: user.contact_number});
-      newRefreshToken = await sendRefreshToken({  id: user._id, email: user.email, contact_number: user.contact_number});
+
+    newAccessToken = await sendToken({ id: user._id, email: user.email, contact_number: user.contact_number });
+    newRefreshToken = await sendRefreshToken({ id: user._id, email: user.email, contact_number: user.contact_number });
 
     if (!user) {
       return ErrorHandler(res, 401, "Unauthorized User");
     }
-  const { token: access_token, expiresin: access_expires_in } = newAccessToken;
-  const { refresh_token, expiresin: refresh_expires_in } = newRefreshToken;
+    const { token: access_token, expiresin: access_expires_in } = newAccessToken;
+    const { refresh_token, expiresin: refresh_expires_in } = newRefreshToken;
 
-  return ResponseOk(res, 200, "access_token_retrieved", {
-    access_token,
-    access_expires_in,
-    refresh_token,
-    refresh_expires_in
-  });
+    return ResponseOk(res, 200, "access_token_retrieved", {
+      access_token,
+      access_expires_in,
+      refresh_token,
+      refresh_expires_in
+    });
   } catch (error) {
     return ErrorHandler(res, 400, error.message || 'Failed to get access token');
   }

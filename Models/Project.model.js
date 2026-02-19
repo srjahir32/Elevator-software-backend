@@ -47,19 +47,19 @@ const ProjectSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    cash_amount_project:{
+    cash_amount_project: {
       type: Number,
       required: false,
     },
-    bank_amount_project:{
+    bank_amount_project: {
       type: Number,
       required: false,
     },
-    total_amount_project:{
+    total_amount_project: {
       type: Number,
       required: false,
     },
-    payment_count_project:{
+    payment_count_project: {
       type: Number,
       required: false,
     },
@@ -72,10 +72,11 @@ const ProjectSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
-    // location: {
-    //     lat: { type: Number, required: true },
-    //     lng: { type: Number, required: true },
-    // },
+    branch_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "branch",
+      required: false, // Set to false to avoid breaking existing data until migration
+    },
   },
   {
     timestamps: true,
@@ -227,17 +228,17 @@ const ElevatorSchema = new mongoose.Schema(
     },
     files: [
       {
-          fileType: {
-              type: String,
-              enum: ['image', 'video'],
-              required: true
-          },
-          fileUrl: {
-              type: String,
-              required: true
-          }
+        fileType: {
+          type: String,
+          enum: ['image', 'video'],
+          required: true
+        },
+        fileUrl: {
+          type: String,
+          required: true
+        }
       }
-  ],
+    ],
     status: {
       type: Number,
       default: 0,
@@ -370,39 +371,39 @@ const MaterialItemSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
-    vision:{
+    vision: {
       type: String,
       required: false,
     },
-    billDetails:{
+    billDetails: {
       type: String,
       required: false,
     },
-    overload:{
+    overload: {
       type: String,
       required: false,
     },
-    meter:{
+    meter: {
       type: String,
       required: false,
     },
-    prograssive:{
+    prograssive: {
       type: String,
       required: false,
     },
-    counter_dbg:{
+    counter_dbg: {
       type: String,
       required: false,
     },
-    counter_weight:{
+    counter_weight: {
       type: String,
       required: false,
     },
-    light:{
+    light: {
       type: String,
       required: false,
     },
-    serial_parallel:{
+    serial_parallel: {
       type: String,
       required: false,
     },
@@ -421,7 +422,7 @@ const MaterialItemSchema = new mongoose.Schema(
         },
       },
     ]
-    
+
 
 
 
@@ -501,29 +502,29 @@ const PaymentEntrySchema = new mongoose.Schema(
     },
     payment_method: {
       type: String,
-      enum: ["Cash", "Cheque", "Bank Transfer", "UPI", "Other","RTGS","NEFT"],
+      enum: ["Cash", "Cheque", "Bank Transfer", "UPI", "Other", "RTGS", "NEFT"],
     },
-    payment_mode:{
+    payment_mode: {
       type: String,
-      enum: ["Cash","Bill"],
+      enum: ["Cash", "Bill"],
     },
     paid_to: {
       type: String,
       required: true,
     },
-    cash_amount:{
+    cash_amount: {
       type: Number,
       required: false,
     },
-    bank_amount:{
+    bank_amount: {
       type: Number,
       required: false,
     },
-    total_amount:{
+    total_amount: {
       type: Number,
       required: false,
     },
-    payment_count:{
+    payment_count: {
       type: Number,
       required: false,
     }

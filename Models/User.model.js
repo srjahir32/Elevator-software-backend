@@ -24,12 +24,21 @@ const UserSchema = new mongoose.Schema({
     type: Number,
     default: 1,
   },
+  branches: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'branch',
+    default: []
+  }],
+  extra_permissions: [{
+    type: Number,
+    default: []
+  }],
 }, {
   timestamps: true,
   versionKey: false,
 });
 UserSchema.pre("save", async function (next) {
-  if (this.isModified("password")) { 
+  if (this.isModified("password")) {
     this.password = await bcrypt.hash(this.password, 12);
   }
   next();
@@ -40,8 +49,8 @@ const Users = mongoose.model('users', UserSchema);
 
 /** Roles Schema */
 const RoleSchema = new mongoose.Schema({
-  id:{
-    type:Number,
+  id: {
+    type: Number,
     required: true,
   },
   name: {
@@ -56,8 +65,8 @@ const Roles = mongoose.model('roles', RoleSchema);
 
 /** Permissions Schema */
 const PermissionSchema = new mongoose.Schema({
-   id:{
-    type:Number,
+  id: {
+    type: Number,
     required: true,
   },
   permission_name: {
@@ -78,7 +87,7 @@ const Permissions = mongoose.model('permissions', PermissionSchema);
 /** User_Associate_With_Role Schema */
 const UserRoleSchema = new mongoose.Schema({
   user_id: {
-    type: mongoose.Schema.Types.ObjectId, 
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'users',
     required: true,
   },
@@ -99,7 +108,7 @@ const RolePermissionSchema = new mongoose.Schema({
     required: true,
   },
   permission_id: {
-    type:Number,
+    type: Number,
     required: true,
   },
 }, {

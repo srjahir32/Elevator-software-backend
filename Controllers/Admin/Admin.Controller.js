@@ -12,6 +12,7 @@ require('dotenv').config();
 const { sendToken } = require('../../Utils/TokenUtils');
 const mongoose = require('mongoose');
 const { NotificationSchema } = require('../../Models/Notification.model');
+const Branch = require('../../Models/Branch.model');
 
 const LoginAdmin = async (req, res) => {
   const { email, contact_number, password } = req.body;
@@ -33,7 +34,7 @@ const LoginAdmin = async (req, res) => {
         { email },
         { contact_number }
       ]
-    });
+    }).populate('branches', 'name _id');
 
     if (!user) {
       return ErrorHandler(res, 404, 'User not found');
@@ -42,6 +43,16 @@ const LoginAdmin = async (req, res) => {
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
       return ErrorHandler(res, 400, 'Invalid credentials');
+    }
+
+    // Fetch Role Information
+    const userRole = await User_Associate_With_Role.findOne({ user_id: user._id });
+    let roleDetails = { id: null, name: null };
+    if (userRole) {
+      const role = await Roles.findOne({ id: userRole.role_id });
+      if (role) {
+        roleDetails = { id: role.id, name: role.name };
+      }
     }
 
     const payload = {
@@ -56,6 +67,9 @@ const LoginAdmin = async (req, res) => {
       user_id: user.id,
       email: user.email,
       contact_number: user.contact_number,
+      role_id: roleDetails.id,
+      role_name: roleDetails.name,
+      branches: user.branches,
       token,
       refresh_token,
       expiresin
@@ -138,10 +152,7 @@ const GetRolePermissions = async (req, res) => {
       }))
     };
 
-    return ResponseOk(res, 200, {
-      message: 'Permissions of the role retrieved successfully',
-      data: result
-    });
+    return ResponseOk(res, 200, 'Permissions of the role retrieved successfully', result);
 
   } catch (error) {
     console.error('Error fetching permissions:', error);
@@ -155,23 +166,26 @@ const GetUserById = async (req, res) => {
     if (!userId) {
       return ErrorHandler(res, 400, "User ID is required");
     }
-    const user = await Users.findById(userId, 'id name email contact_number');
+    const user = await Users.findById(userId, 'id name email contact_number branches extra_permissions');
     if (!user) {
       return ErrorHandler(res, 404, "User not found");
     }
-    console.log("user.id",user.id)
-  const User_Role = await User_Associate_With_Role.findOne({ user_id: user._id });
+    console.log("user.id", user.id)
+    const User_Role = await User_Associate_With_Role.findOne({ user_id: user._id });
 
-    console.log('User_Role',User_Role)
+    console.log('User_Role', User_Role)
     const roles = await Roles.findOne({
-     id:User_Role.role_id
+      id: User_Role.role_id
     })
     return ResponseOk(res, 200, "User retrieved successfully", {
-      user_id: user.id,
+      user_id: user._id,
       name: user.name,
       email: user.email,
       contact_number: user.contact_number,
-      role_name:roles.name
+      role_id: User_Role.role_id,
+      role_name: roles.name,
+      branches: user.branches,
+      extra_permissions: user.extra_permissions
     });
   } catch (error) {
     console.error("GetUserById Error:", error);
@@ -182,10 +196,10 @@ const GetUserById = async (req, res) => {
 const GetUserAll = async (req, res) => {
   try {
 
-        const users = await Users.aggregate([
+    const users = await Users.aggregate([
       {
         $lookup: {
-          from: 'user_associate_with_roles', 
+          from: 'user_associate_with_roles',
           localField: '_id',
           foreignField: 'user_id',
           as: 'userRoles'
@@ -199,9 +213,17 @@ const GetUserAll = async (req, res) => {
           as: 'roles'
         }
       },
-       {
+      {
         $addFields: {
           roleName: { $arrayElemAt: ['$roles.name', 0] }
+        }
+      },
+      {
+        $lookup: {
+          from: 'branches',
+          localField: 'branches',
+          foreignField: '_id',
+          as: 'branchDetails'
         }
       },
       {
@@ -210,14 +232,22 @@ const GetUserAll = async (req, res) => {
           name: 1,
           email: 1,
           contact_number: 1,
-          roleName: 1
+          roleName: 1,
+          branches: {
+            $map: {
+              input: '$branchDetails',
+              as: 'b',
+              in: { _id: '$$b._id', name: '$$b.name' }
+            }
+          },
+          extra_permissions: 1
         }
       }
     ]);
     if (!users) {
       return ErrorHandler(res, 404, "users not found");
     }
-    console.log("here",users)
+    console.log("here", users)
     return ResponseOk(res, 200, "users retrieved successfully", users);
   } catch (error) {
     console.error("GetUserById Error:", error);
@@ -227,14 +257,14 @@ const GetUserAll = async (req, res) => {
 
 const AddAdminUser = async (req, res) => {
   try {
-    const { email, role_id, password, contact_number, name } = req.body;
+    const { email, role_id, password, contact_number, name, branches = [], extra_permissions = [] } = req.body;
 
     if (!name || !email || !password || !contact_number || !role_id) {
       return ErrorHandler(res, 400, "All fields (name, email, password, contact_number, role_id) are required");
     }
 
 
-     const existingUser = await Users.findOne({
+    const existingUser = await Users.findOne({
       $or: [
         { email: email },
         { contact_number: contact_number }
@@ -251,6 +281,8 @@ const AddAdminUser = async (req, res) => {
       password: password,
       contact_number: contact_number,
       name: name,
+      branches,
+      extra_permissions
     });
 
     await User_Associate_With_Role.create({
@@ -281,7 +313,7 @@ const AddAdminUser = async (req, res) => {
 
 const UpdateAdminUser = async (req, res) => {
   try {
-    const { email, role_id, contact_number, name, password } = req.body;
+    const { email, role_id, contact_number, name, password, branches, extra_permissions } = req.body;
     const userRoleId = req.query.id;
 
 
@@ -303,22 +335,27 @@ const UpdateAdminUser = async (req, res) => {
       return ErrorHandler(res, 400, "Another user with this email already exists");
     }
 
-    await Users.findByIdAndUpdate(userId, {
+    const updateData = {
       email,
       contact_number,
       name,
-    });
-    if(req.body.password){
+    };
+
+    if (branches !== undefined) updateData.branches = branches;
+    if (extra_permissions !== undefined) updateData.extra_permissions = extra_permissions;
+
+    await Users.findByIdAndUpdate(userId, updateData);
+    if (req.body.password) {
       const user = await Users.findById(userId);
       user.password = password;
       await user.save();
     }
-  if (req.body.role_id) {
-  await User_Associate_With_Role.updateOne(
-    { user_id: userId },
-    { $set: { role_id: parseInt(role_id) } } 
-   );
-}
+    if (req.body.role_id) {
+      await User_Associate_With_Role.updateOne(
+        { user_id: userId },
+        { $set: { role_id: parseInt(role_id) } }
+      );
+    }
 
 
     const user_details = await Users.findById(req.auth.id)
@@ -381,25 +418,30 @@ const DeleteAdminUser = async (req, res) => {
 
 const AddRolesByAdmin = async (req, res) => {
   try {
-    const { id, name } = req.body;
+    const { name } = req.body;
 
-    if (!id || !name) {
-      return ErrorHandler(res, 400, "Both 'id' and 'name' are required.");
+    if (!name) {
+      return ErrorHandler(res, 200, "Role name is required.");
     }
 
-    const existingRole = await Roles.findOne({ $or: [{ id }, { name }] });
+    const existingRole = await Roles.findOne({ name });
     if (existingRole) {
-      return ErrorHandler(res, 400, "Role with this ID or name already exists.");
+      return ErrorHandler(res, 200, "Role with this name already exists.");
     }
 
-    const newRole = await Roles.create({ id, name });
+    // Auto-generate ID
+    const lastRole = await Roles.findOne().sort({ id: -1 });
+    const newId = lastRole ? lastRole.id + 1 : 1;
 
+    const newRole = await Roles.create({ id: newId, name });
+
+    const user_details = await Users.findById(req.auth.id);
     await ActivityLog.create({
-      user_id: req.user?._id || null,
+      user_id: req.auth?.id || null,
+      user_name: user_details.name,
       action: 'CREATE_ROLE',
-      type: 'Message_Response',
-      sub_type: 'Create',
-      message: `New role "${name}" was created.`,
+      type: 'Create',
+      description: `New role "${name}" was created with ID ${newId}.`,
       title: 'Role Created',
       project_id: null,
     });
@@ -409,6 +451,124 @@ const AddRolesByAdmin = async (req, res) => {
   } catch (error) {
     console.error("AddRole Error:", error);
     return ErrorHandler(res, 500, "Failed to create role");
+  }
+};
+
+const AddPermissionByAdmin = async (req, res) => {
+  try {
+    const { permission_name } = req.body;
+
+    if (!permission_name) {
+      return ErrorHandler(res, 200, "Permission name is required.");
+    }
+
+    const existingPermission = await Permissions.findOne({ permission_name });
+    if (existingPermission) {
+      return ErrorHandler(res, 200, "Permission already exists.");
+    }
+
+    // Auto-generate ID
+    const lastPermission = await Permissions.findOne().sort({ id: -1 });
+    const newId = lastPermission ? lastPermission.id + 1 : 1;
+
+    const newPermission = await Permissions.create({
+      id: newId,
+      permission_name,
+      status: 1
+    });
+
+    // Automatically assign to Admin (role_id: 1)
+    await Role_with_permission.create({
+      role_id: 1,
+      permission_id: newId
+    });
+
+    const user_details = await Users.findById(req.auth.id);
+    await ActivityLog.create({
+      user_id: req.auth?.id || null,
+      user_name: user_details.name,
+      action: 'CREATE_PERMISSION',
+      type: 'Create',
+      description: `New permission "${permission_name}" was created and assigned to Admin.`,
+      title: 'Permission Created',
+      project_id: null,
+    });
+
+    return ResponseOk(res, 200, "Permission created successfully", newPermission);
+  } catch (error) {
+    console.error("AddPermissionByAdmin Error:", error);
+    return ErrorHandler(res, 500, "Failed to create permission");
+  }
+};
+
+const UpdatePermissionByAdmin = async (req, res) => {
+  try {
+    const { id, permission_name } = req.body;
+
+    if (!id || !permission_name) {
+      return ErrorHandler(res, 200, "Permission ID and name are required.");
+    }
+
+    const updatedPermission = await Permissions.findOneAndUpdate(
+      { id },
+      { permission_name },
+      { new: true }
+    );
+
+    if (!updatedPermission) {
+      return ErrorHandler(res, 404, "Permission not found.");
+    }
+
+    const user_details = await Users.findById(req.auth.id);
+    await ActivityLog.create({
+      user_id: req.auth?.id || null,
+      user_name: user_details.name,
+      action: 'UPDATE_PERMISSION',
+      type: 'Update',
+      description: `Permission ID ${id} was updated to "${permission_name}".`,
+      title: 'Permission Updated',
+      project_id: null,
+    });
+
+    return ResponseOk(res, 200, "Permission updated successfully", updatedPermission);
+  } catch (error) {
+    console.error("UpdatePermissionByAdmin Error:", error);
+    return ErrorHandler(res, 500, "Failed to update permission");
+  }
+};
+
+const DeletePermissionByAdmin = async (req, res) => {
+  try {
+    const { id } = req.query;
+
+    if (!id) {
+      return ErrorHandler(res, 400, "Permission ID is required.");
+    }
+
+    const deletedPermission = await Permissions.findOneAndDelete({ id: parseInt(id) });
+
+    if (!deletedPermission) {
+      return ErrorHandler(res, 404, "Permission not found.");
+    }
+
+    // Remove associations
+    await Role_with_permission.deleteMany({ permission_id: parseInt(id) });
+
+    const user_details = await Users.findById(req.auth.id);
+    await ActivityLog.create({
+      user_id: req.auth?.id || null,
+      user_name: user_details.name,
+      action: 'DELETE_PERMISSION',
+      type: 'Delete',
+      description: `Permission "${deletedPermission.permission_name}" was deleted.`,
+      title: 'Permission Deleted',
+      project_id: null,
+    });
+
+    return ResponseOk(res, 200, "Permission deleted successfully");
+  } catch (error) {
+    console.error("DeletePermissionByAdmin Error:", error);
+    return ErrorHandler(res, 500, "Failed to delete permission");
   }
 };
 
@@ -675,9 +835,22 @@ const GetStaticData = async (req, res) => {
 
 const DashboardKPI = async (req, res) => {
   try {
+    const roleMatch = await getRoleBasedMatch(req);
 
-    const ProjectCount = await Project.countDocuments();
-    const TotalElevators = await Elevators.countDocuments();
+    const ProjectCount = await Project.countDocuments(roleMatch);
+
+    // Total Elevators count should also respect the branch filter
+    let elevatorFilter = {};
+    if (roleMatch.branch_id) {
+      // We need to find projects that match roleMatch and then count their elevators
+      const matchingProjectIds = await Project.find(roleMatch).distinct('_id');
+      elevatorFilter.project_id = { $in: matchingProjectIds };
+    } else if (roleMatch.Site_Supervisor) {
+      const matchingProjectIds = await Project.find(roleMatch).distinct('_id');
+      elevatorFilter.project_id = { $in: matchingProjectIds };
+    }
+
+    const TotalElevators = await Elevators.countDocuments(elevatorFilter);
 
     return ResponseOk(res, 200, "Dashboard KPIs fetched successfully", {
       ProjectCount,
@@ -699,11 +872,23 @@ async function getRoleBasedMatch(req) {
     if (userRole) {
       const role = await Roles.findOne({ id: userRole.role_id });
 
-      if (role && role.name === "Supervisor" || role.name === "Vapi_Purchase") {
+      if (role && role.name !== "Admin") {
+        const { branchId } = req.query;
         const user = await Users.findById(req.auth.id);
-        if (user && user.name) {
-          match.Site_Supervisor = user.name;
+
+        if (branchId) {
+          const isAssigned = user.branches.some(b => b.toString() === branchId);
+          if (isAssigned) {
+            match.branch_id = new mongoose.Types.ObjectId(branchId);
+          } else {
+            // If mismatch, we should probably return a query that finds nothing or throw
+            match.branch_id = new mongoose.Types.ObjectId(); // Non-matching ID
+          }
+        } else {
+          match.branch_id = { $in: user.branches };
         }
+      } else if (req.query.branchId) {
+        match.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
       }
     }
   }
@@ -907,15 +1092,15 @@ const GetAllNotification = async (req, res) => {
   try {
     const userId = req.auth.id;
 
- 
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
- 
+
     const findUser_with_role = await User_Associate_With_Role.findOne({
-       user_id: userId
+      user_id: userId
     });
- 
+
     if (![1, 7].includes(findUser_with_role.role_id)) {
       return ErrorHandler(
         res,
@@ -925,12 +1110,12 @@ const GetAllNotification = async (req, res) => {
       );
     }
     const findUnread = await NotificationSchema.countDocuments({
-      mark_as_read:false
+      mark_as_read: false
     })
     const findread = await NotificationSchema.countDocuments({
-      mark_as_read:true
+      mark_as_read: true
     })
- 
+
     const [notifications, totalCount] = await Promise.all([
       NotificationSchema.find()
         .sort({ createdAt: -1 })
@@ -938,7 +1123,7 @@ const GetAllNotification = async (req, res) => {
         .limit(limit),
       NotificationSchema.countDocuments(),
     ]);
- 
+
     return ResponseOk(res, 200, "Notifications retrieved successfully", {
       data: notifications,
       pagination: {
@@ -946,11 +1131,11 @@ const GetAllNotification = async (req, res) => {
         limit,
         totalRecords: totalCount,
         totalPages: Math.ceil(totalCount / limit),
-        findUnread:findUnread,
-        findread:findread
+        findUnread: findUnread,
+        findread: findread
       }
     });
- 
+
   } catch (error) {
     console.error("Error in GetAllNotification:", error);
     return ErrorHandler(res, 500, "Failed to retrieve notifications", error);
@@ -959,42 +1144,42 @@ const GetAllNotification = async (req, res) => {
 
 
 
-const MarkNotificationAsread = async (req,res) =>{
+const MarkNotificationAsread = async (req, res) => {
   try {
-    
-    const {_id} = req.body;
+
+    const { _id } = req.body;
 
     const markeNotification = await NotificationSchema.findByIdAndUpdate(
-    _id,
-    {mark_as_read:true},
+      _id,
+      { mark_as_read: true },
     )
-    return ResponseOk(res,200,"Notification Marked As View",{})
-  
+    return ResponseOk(res, 200, "Notification Marked As View", {})
+
   } catch (error) {
     console.error("Error in MarkNotificationAsread:", error);
     return ErrorHandler(res, 500, "Failed to mark notification", error);
   }
 
-  
+
 }
 
-const MarkNotificationAsreadAll = async (req,res) =>{
+const MarkNotificationAsreadAll = async (req, res) => {
   try {
-  
+
     const markeNotification = await NotificationSchema.updateMany(
-    {},
-    {$set: { mark_as_read:true}},
+      {},
+      { $set: { mark_as_read: true } },
     )
 
-    
-    return ResponseOk(res,200,"Notification Marked As View",{})
-  
+
+    return ResponseOk(res, 200, "Notification Marked As View", {})
+
   } catch (error) {
     console.error("Error in MarkNotificationAsread:", error);
     return ErrorHandler(res, 500, "Failed to mark notification", error);
   }
 
-  
+
 }
 module.exports = {
   LoginAdmin,
@@ -1008,6 +1193,9 @@ module.exports = {
   AddRolesByAdmin,
   UpdateRole,
   DeleteRole,
+  AddPermissionByAdmin,
+  UpdatePermissionByAdmin,
+  DeletePermissionByAdmin,
   UpdatePermissionAdmin,
   UpdateProjectStatus,
   ViewProjectById,

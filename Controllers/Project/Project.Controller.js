@@ -25,11 +25,12 @@ const CreateProject = async (req, res) => {
       bank_amount_project,
       total_amount_project,
       payment_count_project,
+      branch_id,
     } = req.body;
 
     if (
       !site_name || !site_address || !client_name ||
-      !payment_amount  || !Site_Supervisor || !map_url 
+      !payment_amount || !Site_Supervisor || !map_url
     ) {
       return ErrorHandler(res, 200, "All required fields must be provided");
     }
@@ -50,7 +51,9 @@ const CreateProject = async (req, res) => {
       cash_amount_project,
       bank_amount_project,
       total_amount_project,
+      total_amount_project,
       payment_count_project,
+      branch_id,
     });
     const user_details = await Users.findById(req.auth.id)
     await ActivityLog.create({
@@ -85,6 +88,40 @@ const ViewProject = async (req, res) => {
     } = req.query;
 
     const matchStage = {};
+
+    // Branch visibility logic
+    if (req.auth && req.auth.id) {
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id)
+      });
+
+      if (userRole) {
+        const role = await Roles.findOne({ id: userRole.role_id });
+
+        // If not Admin, enforce branch-based filtering
+        if (role && role.name !== "Admin") {
+          const { branchId } = req.query;
+          if (branchId) {
+            // Check if user is assigned to this branch
+            const user = await Users.findById(req.auth.id);
+            const isAssigned = user.branches.some(b => b.toString() === branchId);
+
+            if (isAssigned) {
+              matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+            } else {
+              return ErrorHandler(res, 403, "You are not assigned to this branch");
+            }
+          } else {
+            // If no branchId provided, return projects for ALL assigned branches
+            const user = await Users.findById(req.auth.id);
+            matchStage.branch_id = { $in: user.branches };
+          }
+        } else if (req.query.branchId) {
+          // Admins can filter by any branchId if provided
+          matchStage.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
+        }
+      }
+    }
 
     if (supervisor) {
       matchStage.Site_Supervisor = supervisor;
@@ -211,6 +248,28 @@ const UpdateProject = async (req, res) => {
       return ErrorHandler(res, 200, "Project ID is required");
     }
 
+    const query = { _id: projectId };
+
+    // Branch visibility logic for Authorization
+    if (req.auth && req.auth.id) {
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id),
+      });
+
+      if (userRole) {
+        const role = await Roles.findOne({ id: userRole.role_id });
+        if (role && role.name !== "Admin") {
+          const user = await Users.findById(req.auth.id);
+          query.branch_id = { $in: user.branches || [] };
+        }
+      }
+    }
+
+    const checkProject = await Project.findOne(query);
+    if (!checkProject) {
+      return ErrorHandler(res, 404, "Project not found or unauthorized to update");
+    }
+
     const allowedFields = [
       "site_name",
       "aggrement_no",
@@ -328,7 +387,7 @@ const ViewListOfSupervisors = async (req, res) => {
 //       if (minRemaining) matchConditions.amount_remaining.$gte = Number(minRemaining);
 //       if (maxRemaining) matchConditions.amount_remaining.$lte = Number(maxRemaining);
 //     }
-   
+
 //     const pipeline = [
 //       {
 //         $lookup: {
@@ -419,54 +478,72 @@ const GetProjectShortDetails = async (req, res) => {
       minRemaining,
       maxRemaining
     } = req.query;
- 
+
     const matchConditions = {};
- 
+
+    // Branch visibility logic
     if (req.auth && req.auth.id) {
-      const userRole = await User_Associate_With_Role.findOne({ 
-        user_id: new mongoose.Types.ObjectId(req.auth.id) 
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id)
       });
-      
+
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        
-        if (role && (role.name === "Supervisor" || role.name === "Vapi_Purchase")) {
-          const user = await Users.findById(req.auth.id);
-          if (user && user.name) {
-            matchConditions.Site_Supervisor = user.name;
+
+        // If not Admin, enforce branch-based filtering
+        if (role && role.name !== "Admin") {
+          const { branchId, supervisor: supervisorQuery } = req.query;
+
+          if (branchId) {
+            // Check if user is assigned to this branch
+            const user = await Users.findById(req.auth.id);
+            const isAssigned = user.branches.some(b => b.toString() === branchId);
+
+            if (isAssigned) {
+              matchConditions.branch_id = new mongoose.Types.ObjectId(branchId);
+            } else {
+              return ErrorHandler(res, 403, "You are not assigned to this branch");
+            }
+          } else {
+            // If no branchId provided, return projects for ALL assigned branches
+            const user = await Users.findById(req.auth.id);
+            matchConditions.branch_id = { $in: user.branches };
           }
+        } else if (req.query.branchId) {
+          // Admins can filter by any branchId if provided
+          matchConditions.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
         }
       }
     }
- 
+
     if (supervisor && !matchConditions.Site_Supervisor) {
       matchConditions.Site_Supervisor = supervisor;
     }
- 
+
     if (fromDate || toDate) {
       matchConditions.aggrement_date = {};
       if (fromDate) matchConditions.aggrement_date.$gte = new Date(fromDate);
       if (toDate) matchConditions.aggrement_date.$lte = new Date(toDate);
     }
- 
+
     if (minPayment || maxPayment) {
       matchConditions.payment_amount = {};
       if (minPayment) matchConditions.payment_amount.$gte = Number(minPayment);
       if (maxPayment) matchConditions.payment_amount.$lte = Number(maxPayment);
     }
- 
+
     if (minReceived || maxReceived) {
       matchConditions.amount_received = {};
       if (minReceived) matchConditions.amount_received.$gte = Number(minReceived);
       if (maxReceived) matchConditions.amount_received.$lte = Number(maxReceived);
     }
- 
+
     if (minRemaining || maxRemaining) {
       matchConditions.amount_remaining = {};
       if (minRemaining) matchConditions.amount_remaining.$gte = Number(minRemaining);
       if (maxRemaining) matchConditions.amount_remaining.$lte = Number(maxRemaining);
     }
-   
+
     const pipeline = [
       {
         $lookup: {
@@ -511,13 +588,13 @@ const GetProjectShortDetails = async (req, res) => {
         }
       },
     ];
- 
+
     if (Object.keys(matchConditions).length > 0) {
       pipeline.push({ $match: matchConditions });
     }
- 
+
     pipeline.push({ $sort: { createdAt: -1 } });
- 
+
     pipeline.push({
       $project: {
         _id: 1,
@@ -535,21 +612,21 @@ const GetProjectShortDetails = async (req, res) => {
         amount_received: 1,
         amount_remaining: 1,
         payment_progress: 1,
-        project_status:1,
-        elevator_count:1,
+        project_status: 1,
+        elevator_count: 1,
         cash_amount_project: 1,
         bank_amount_project: 1,
         total_amount_project: 1,
         payment_count_project: 1,
       }
     });
- 
+
     const projects = await Project.aggregate(pipeline);
- 
+
     if (!projects || projects.length === 0) {
       return ErrorHandler(res, 200, "No projects found");
     }
- 
+
     return ResponseOk(res, 200, "Projects retrieved successfully", projects);
   } catch (error) {
     console.error("Error in GetProjectShortDetails:", error);
@@ -566,7 +643,28 @@ const GetProjectDetailsById = async (req, res) => {
       return ErrorHandler(res, 200, "Project ID is required");
     }
 
-    const findProjectDetails = await Project.findById(projectId);
+    const query = { _id: projectId };
+
+    // Branch visibility logic
+    if (req.auth && req.auth.id) {
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id),
+      });
+
+      if (userRole) {
+        const role = await Roles.findOne({ id: userRole.role_id });
+        if (role && role.name !== "Admin") {
+          const user = await Users.findById(req.auth.id);
+          query.branch_id = { $in: user.branches || [] };
+        }
+      }
+    }
+
+    const findProjectDetails = await Project.findOne(query);
+
+    if (!findProjectDetails) {
+      return ErrorHandler(res, 404, "Project not found or access denied");
+    }
 
     return ResponseOk(res, 200, "Project details retrieved successfully", findProjectDetails);
 
@@ -591,6 +689,22 @@ const ViewProjectOverviewById = async (req, res) => {
 
     const matchStage = {};
 
+    // Branch visibility logic (Consistency Check)
+    if (req.auth && req.auth.id) {
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id)
+      });
+
+      if (userRole) {
+        const role = await Roles.findOne({ id: userRole.role_id });
+
+        if (role && role.name !== "Admin") {
+          const user = await Users.findById(req.auth.id);
+          matchStage.branch_id = { $in: user.branches };
+        }
+      }
+    }
+
     if (supervisor) {
       matchStage.Site_Supervisor = supervisor;
     }
@@ -604,6 +718,7 @@ const ViewProjectOverviewById = async (req, res) => {
     const projects = await Project.aggregate([
       {
         $match: {
+          ...matchStage,
           _id: new mongoose.Types.ObjectId(req.query.projectId)
         }
       },
@@ -644,7 +759,7 @@ const ViewProjectOverviewById = async (req, res) => {
               0
             ]
           },
-            project_status: {
+          project_status: {
             $cond: [{ $eq: ["$payment_amount", "$amount_received"] }, "Completed", "Due"]
           }
         }
@@ -696,7 +811,7 @@ const ViewProjectOverviewById = async (req, res) => {
           amount_remaining: 1,
           payment_progress: 1,
           additional_notes: 1,
-          project_status:1,
+          project_status: 1,
           map_url: 1,
           cash_amount_project: 1,
           bank_amount_project: 1,
@@ -719,12 +834,36 @@ const ViewProjectOverviewById = async (req, res) => {
 
 const DeleteProject = async (req, res) => {
   try {
-    const projectId = req.query.projectId;
-    const password = req.body.password;
+    const { projectId } = req.query;
+    const { password } = req.body;
 
+    const query = { _id: projectId };
+
+    // Branch visibility logic for Authorization
     if (!projectId || !password) {
       return ErrorHandler(res, 200, "Password and Project ID are required");
     }
+
+    if (req.auth && req.auth.id) {
+      const userRole = await User_Associate_With_Role.findOne({
+        user_id: new mongoose.Types.ObjectId(req.auth.id),
+      });
+
+      if (userRole) {
+        const role = await Roles.findOne({ id: userRole.role_id });
+        if (role && role.name !== "Admin") {
+          const user = await Users.findById(req.auth.id);
+          query.branch_id = { $in: user.branches || [] };
+        }
+      }
+    }
+
+    const project = await Project.findOne(query);
+
+    if (!project) {
+      return ErrorHandler(res, 404, "Project not found or unauthorized to delete");
+    }
+
     const email = req.auth.email;
     const user = await Users.findOne({
       $or: [
@@ -740,7 +879,7 @@ const DeleteProject = async (req, res) => {
     if (!match) {
       return ErrorHandler(res, 200, 'Invalid password');
     }
-    const projectDetails = await Project.findById(projectId);
+
     let deletedProject;
     if (match) {
       deletedProject = await Project.findByIdAndDelete(projectId);
