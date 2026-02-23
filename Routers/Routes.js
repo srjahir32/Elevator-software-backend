@@ -14,6 +14,7 @@ const DeliveryFormRouter = require("./DeliveryForm/DeliveryFormRoutes");
 const MechanicalQCRouter = require("./Mechanical_QC/MechanicalQCRoutes");
 const ActivityLogsRouter = require("./ActivityLogs/LogsRoutes");
 const BranchRouter = require("./Branch/BranchRoutes");
+const AMCRouter = require("./AMC/AMCRoutes");
 
 Routes.use("/auth", AuthRouter);
 // ... existing lines
@@ -31,5 +32,6 @@ Routes.use('/pre_install', PreInstallRouter);
 Routes.use('/delivery_form', DeliveryFormRouter);
 Routes.use('/mechanical_qc', MechanicalQCRouter);
 Routes.use('/logs', ActivityLogsRouter);
+Routes.use('/amc', AMCRouter);
 
 module.exports = Routes;

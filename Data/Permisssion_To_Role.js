@@ -100,6 +100,11 @@ exports.PermissionsData = [
   { id: 76, permission_name: "Add Branch" },
   { id: 77, permission_name: "Edit Branch" },
   { id: 78, permission_name: "Delete Branch" },
+
+  { id: 80, permission_name: "View AMC" },
+  { id: 81, permission_name: "Add AMC" },
+  { id: 82, permission_name: "Edit AMC" },
+  { id: 83, permission_name: "Delete AMC" },
 ];
 
 
@@ -183,6 +188,10 @@ exports.PermissionRolesData = [
   { id: 77, role_id: 1, permission_id: 77 },
   { id: 78, role_id: 1, permission_id: 78 },
   { id: 123, role_id: 1, permission_id: 79 }, // View Vender Order list
+  { id: 124, role_id: 1, permission_id: 80 }, // View AMC
+  { id: 125, role_id: 1, permission_id: 81 }, // Add AMC
+  { id: 126, role_id: 1, permission_id: 82 }, // Edit AMC
+  { id: 127, role_id: 1, permission_id: 83 }, // Delete AMC
 
   // Manager (role_id: 3)
   { id: 79, role_id: 3, permission_id: 2 },  // View Project
