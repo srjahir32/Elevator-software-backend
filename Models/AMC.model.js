@@ -18,7 +18,7 @@ const ServiceScheduleSchema = new mongoose.Schema(
     },
     service_status: {
       type: String,
-      enum: ["Pending", "In Progress", "Completed", "Skipped"],
+      enum: ["Pending", "In Progress", "Completed", "Skipped", "Overdue"],
       default: "Pending",
     },
     technician_name: {
@@ -108,7 +108,7 @@ const PaymentScheduleSchema = new mongoose.Schema(
     },
     payment_status: {
       type: String,
-      enum: ["Pending", "Paid", "Overdue"],
+      enum: ["Pending", "Paid", "Partial", "Overdue"],
       default: "Pending",
     },
     payment_method: {
@@ -185,6 +185,11 @@ const AMCSchema = new mongoose.Schema(
       required: true,
       default: 12,
     },
+    amc_type: {
+      type: String,
+      enum: ["Comprehensive", "Non-Comprehensive"],
+      default: "Comprehensive",
+    },
     contract_amount: {
       type: Number,
       required: true,
@@ -229,6 +234,10 @@ const AMCSchema = new mongoose.Schema(
     auto_renewal: {
       type: Boolean,
       default: false,
+    },
+    renewal_reminder_days: {
+      type: Number,
+      default: 30,
     },
     terms_and_conditions: {
       type: String,
@@ -323,6 +332,8 @@ AMCSchema.index({ contract_start_date: 1 });
 AMCSchema.index({ contract_end_date: 1 });
 AMCSchema.index({ contract_status: 1 });
 AMCSchema.index({ branch_id: 1 });
+AMCSchema.index({ branch_id: 1, contract_status: 1 });
+AMCSchema.index({ branch_id: 1, contract_end_date: 1 });
 
 // Pre-save middleware to calculate remaining amount and recalculate total_paid_amount
 AMCSchema.pre("save", function (next) {
