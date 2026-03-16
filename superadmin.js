@@ -118,7 +118,7 @@ exports.MakeData = async () => {
         console.error('Error creating user:', err.message);
       }
     }
-    await createUserWithRole('avadhadmin@yopmail.com', 'avadh@419', 'Superadmin', '1234567890');
+    await createUserWithRole('admin@elevator.io', 'elevator@io', 'Superadmin', '1234567890');
 
     console.log('Database seeding completed successfully');
   } catch (error) {

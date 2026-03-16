@@ -121,7 +121,7 @@ const UpdateElevator = async (req, res) => {
     const updateData = req.body;
     console.log("Update Data:", updateData);
 
-    
+
     const updatedElevator = await Elevators.findByIdAndUpdate(
       elevatorId,
       updateData,
@@ -274,6 +274,9 @@ const DeleteElevator = async (req, res) => {
 const GetElevatorByProjectId = async (req, res) => {
   try {
     const projectId = req.query.project_id;
+    if (!projectId || projectId === "null" || projectId === "undefined") {
+      return ResponseOk(res, 200, "No project ID provided", []);
+    }
     const elevator = await Elevators.find({ project_id: projectId })
       .select(
         "_id project_id elevator_name type_of_elevator operation_type passenger_capacity no_of_floors stops speed seal_size rated_load cabin_height opening_center_telescope_no handrail_box rfid tft_display"

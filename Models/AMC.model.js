@@ -146,19 +146,30 @@ const AMCSchema = new mongoose.Schema(
       unique: true,
       trim: true,
     },
-    elevator_id: {
+    elevator_ids: [{
       type: mongoose.Schema.Types.ObjectId,
       ref: "elevator",
-      required: true,
-    },
+      required: false,
+    }],
     project_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "project",
-      required: true,
+      required: false,
     },
+    is_external: {
+      type: Boolean,
+      default: false,
+    },
+    external_project_name: {
+      type: String,
+      trim: true,
+    },
+    external_elevator_names: [{
+      type: String,
+      trim: true,
+    }],
     client_name: {
       type: String,
-      required: true,
     },
     client_email: {
       type: String,
@@ -166,7 +177,6 @@ const AMCSchema = new mongoose.Schema(
     },
     client_mobile: {
       type: String,
-      required: true,
     },
     client_address: {
       type: String,
@@ -174,15 +184,12 @@ const AMCSchema = new mongoose.Schema(
     },
     contract_start_date: {
       type: Date,
-      required: true,
     },
     contract_end_date: {
       type: Date,
-      required: true,
     },
     contract_duration_months: {
       type: Number,
-      required: true,
       default: 12,
     },
     amc_type: {
@@ -192,15 +199,134 @@ const AMCSchema = new mongoose.Schema(
     },
     contract_amount: {
       type: Number,
-      required: true,
     },
     gst_amount: {
       type: Number,
       default: 0,
     },
+    gst_percentage: {
+      type: Number,
+      default: 0,
+    },
     total_amount: {
       type: Number,
-      required: true,
+    },
+    // External Elevator Details
+    type_of_elevator: {
+      type: String,
+      default: null,
+    },
+    operation_type: {
+      type: String,
+      default: null,
+    },
+    passenger_capacity: {
+      type: String,
+      default: null,
+    },
+    speed: {
+      type: String,
+      default: null,
+    },
+    no_of_floors: {
+      type: String,
+      default: null,
+    },
+    stops: {
+      type: String,
+      default: null,
+    },
+    opening_type: {
+      type: String,
+      default: null,
+    },
+    lift_well_width: {
+      type: Number,
+      default: null,
+    },
+    lift_well_depth: {
+      type: Number,
+      default: null,
+    },
+    car_enclouser_type: {
+      type: String,
+      default: null,
+    },
+    car_flooring_type: {
+      type: String,
+      default: null,
+    },
+    car_door_type: {
+      type: String,
+      default: null,
+    },
+    landing_door_type: {
+      type: String,
+      default: null,
+    },
+    clear_opening_height: {
+      type: Number,
+      default: null,
+    },
+    clear_opening_width: {
+      type: Number,
+      default: null,
+    },
+    false_ceiling: {
+      type: String,
+      default: null,
+    },
+    ms_door_frames: {
+      type: String,
+      default: null,
+    },
+    ard_system: {
+      type: Boolean,
+      default: false,
+    },
+    overload_sensor: {
+      type: Boolean,
+      default: false,
+    },
+    telephone: {
+      type: Boolean,
+      default: false,
+    },
+    fan_blower: {
+      type: String,
+      default: null,
+    },
+    lop_cop: {
+      type: String,
+      default: null,
+    },
+    opening_center_telescope_no: {
+      type: String,
+      default: null,
+    },
+    handrail_box: {
+      type: String,
+      default: null,
+    },
+    rfid: {
+      type: String,
+      default: null,
+    },
+    tft_display: {
+      type: String,
+      default: null,
+    },
+    seal_size: {
+      type: String,
+      default: null,
+    },
+    rated_load: {
+      type: String,
+      default: null,
+    },
+    cabin_height: {
+      type: String,
+      default: null,
     },
     payment_frequency: {
       type: String,
@@ -224,7 +350,7 @@ const AMCSchema = new mongoose.Schema(
     },
     contract_status: {
       type: String,
-      enum: ["Active", "Expired", "Cancelled", "Pending", "Completed"],
+      enum: ["Active", "Expired", "Cancelled", "Pending", "Completed", "Draft"],
       default: "Pending",
     },
     renewal_date: {
@@ -248,7 +374,8 @@ const AMCSchema = new mongoose.Schema(
       default: null,
     },
     assigned_technician: {
-      type: String,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "technician",
       default: null,
     },
     technician_contact: {
@@ -344,7 +471,7 @@ AMCSchema.pre("save", function (next) {
       .reduce((sum, payment) => sum + (payment.amount || 0), 0);
     this.total_paid_amount = totalPaid;
   }
-  
+
   // Calculate remaining amount
   if (this.total_amount && this.total_paid_amount !== undefined) {
     this.remaining_amount = this.total_amount - this.total_paid_amount;

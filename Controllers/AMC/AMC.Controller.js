@@ -42,29 +42,29 @@ function attachDisplayStatus(amc) {
 const updateContractStatus = async (amc) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  
+
   const startDate = new Date(amc.contract_start_date);
   startDate.setHours(0, 0, 0, 0);
-  
+
   const endDate = new Date(amc.contract_end_date);
   endDate.setHours(0, 0, 0, 0);
-  
+
   // Use small tolerance for floating point comparison
   const allPaymentsPaid = Math.abs((amc.total_paid_amount || 0) - (amc.total_amount || 0)) < 0.01;
   const contractStarted = today >= startDate;
   const contractEnded = today > endDate;
-  
+
   // Don't update if contract is manually cancelled
   if (amc.contract_status === "Cancelled") {
     return;
   }
-  
+
   // Contract hasn't started yet
   if (!contractStarted) {
     amc.contract_status = "Pending";
     return;
   }
-  
+
   // Contract is active (within date range) - FIRST CHECK
   if (contractStarted && !contractEnded) {
     // Contract should be Active during its period
@@ -72,7 +72,7 @@ const updateContractStatus = async (amc) => {
     amc.contract_status = "Active";
     return;
   }
-  
+
   // Contract period has ended - THEN CHECK FOR COMPLETION
   if (contractEnded) {
     if (allPaymentsPaid) {
@@ -101,7 +101,7 @@ const canCreateOrEditAMC = async (req) => {
 const generateContractNumber = async () => {
   const year = new Date().getFullYear();
   const prefix = `AMC-${year}-`;
-  
+
   const lastContract = await AMC.findOne({
     contract_number: { $regex: `^${prefix}` },
   })
@@ -200,7 +200,7 @@ const CreateAMC = async (req, res) => {
     }
 
     let {
-      elevator_id,
+      elevator_ids,
       project_id,
       client_name,
       client_email,
@@ -224,7 +224,42 @@ const CreateAMC = async (req, res) => {
       service_schedule,
       payment_schedule,
       files,
+      is_draft,
+      is_external,
+      external_project_name,
+      external_elevator_names,
+      type_of_elevator,
+      operation_type,
+      passenger_capacity,
+      speed,
+      no_of_floors,
+      stops,
+      opening_type,
+      lift_well_width,
+      lift_well_depth,
+      car_enclouser_type,
+      car_flooring_type,
+      car_door_type,
+      landing_door_type,
+      clear_opening_height,
+      clear_opening_width,
+      false_ceiling,
+      ms_door_frames,
+      ard_system,
+      overload_sensor,
+      telephone,
+      fan_blower,
+      lop_cop,
+      opening_center_telescope_no,
+      handrail_box,
+      rfid,
+      tft_display,
+      seal_size,
+      rated_load,
+      cabin_height,
     } = req.body;
+
+
 
     // Auto: End date from Start + Duration
     if (contract_start_date && contract_duration_months && !contract_end_date) {
@@ -239,14 +274,32 @@ const CreateAMC = async (req, res) => {
 
     // Validation with detailed error messages
     const missingFields = [];
-    if (!elevator_id) missingFields.push("Elevator");
-    if (!project_id) missingFields.push("Project");
-    if (!client_name) missingFields.push("Client Name");
-    if (!client_mobile) missingFields.push("Client Mobile");
-    if (!contract_start_date) missingFields.push("Contract Start Date");
-    if (!contract_end_date) missingFields.push("Contract End Date");
-    if (contract_amount == null || contract_amount === "") missingFields.push("Contract Amount");
-    if (total_amount == null || total_amount === "") missingFields.push("Total Amount");
+    if (!is_draft) {
+      if (!is_external) {
+        if (!elevator_ids || (Array.isArray(elevator_ids) && elevator_ids.length === 0)) missingFields.push("Elevators");
+        if (!project_id) missingFields.push("Project");
+      } else {
+        if (!external_project_name) missingFields.push("New AMC Name");
+        if (!external_elevator_names || (Array.isArray(external_elevator_names) && external_elevator_names.length === 0)) missingFields.push("New Elevator Names");
+      }
+      if (!client_name) missingFields.push("Client Name");
+      if (!client_mobile) missingFields.push("Client Mobile");
+      if (!contract_start_date) missingFields.push("Contract Start Date");
+      if (!contract_end_date) missingFields.push("Contract End Date");
+      if (contract_amount == null || contract_amount === "") missingFields.push("Contract Amount");
+      if (total_amount == null || total_amount === "") missingFields.push("Total Amount");
+    } else {
+      // For draft, at least basic info might be needed, but let's make it very flexible
+      if (!is_external) {
+        if ((!elevator_ids || elevator_ids.length === 0) && !project_id) {
+          return ErrorHandler(res, 400, "Elevators or Project is required even for draft");
+        }
+      } else {
+        if (!external_project_name && (!external_elevator_names || external_elevator_names.length === 0)) {
+          return ErrorHandler(res, 400, "New AMC Name or New Elevator Names is required even for draft");
+        }
+      }
+    }
 
     if (missingFields.length > 0) {
       return ErrorHandler(
@@ -256,36 +309,44 @@ const CreateAMC = async (req, res) => {
       );
     }
 
-    // Prevent duplicate active AMC for same elevator
-    const existingActive = await AMC.findOne({
-      elevator_id,
-      contract_status: "Active",
-    });
-    if (existingActive) {
-      return ErrorHandler(
-        res,
-        400,
-        "An active AMC already exists for this elevator. Please expire or cancel it before creating a new one."
-      );
-    }
+    // Prevent duplicate active AMC for same elevators (only for internal elevators)
+    if (!is_external && elevator_ids && Array.isArray(elevator_ids)) {
+      for (const eid of elevator_ids) {
+        const existingActive = await AMC.findOne({
+          elevator_ids: eid,
+          contract_status: "Active",
+        });
+        if (existingActive) {
+          return ErrorHandler(
+            res,
+            400,
+            `An active AMC already exists for elevator ${eid}. Please expire or cancel it before creating a new one.`
+          );
+        }
 
-    // Check if elevator exists
-    const elevator = await Elevators.findById(elevator_id);
-    if (!elevator) {
-      return ErrorHandler(res, 404, "Elevator not found");
+        // Check if elevator exists
+        const elevator = await Elevators.findById(eid);
+        if (!elevator) {
+          return ErrorHandler(res, 404, `Elevator ${eid} not found`);
+        }
+      }
     }
 
     // Generate contract number
     const contract_number = await generateContractNumber();
 
-    const totalAmountNum = Number(total_amount);
-    const startDate = new Date(contract_start_date);
-    const endDate = new Date(contract_end_date);
-    const durationMonths = contract_duration_months || Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 30.44)) || 12;
+    const totalAmountNum = total_amount != null ? Number(total_amount) : null;
+    const startDate = contract_start_date ? new Date(contract_start_date) : null;
+    const endDate = contract_end_date ? new Date(contract_end_date) : null;
+    let durationMonths = Number(contract_duration_months) || 12;
+
+    if (startDate && endDate && !contract_duration_months) {
+      durationMonths = Math.round((endDate - startDate) / (1000 * 60 * 60 * 24 * 30.44));
+    }
 
     // Generate service schedule if not provided
-    let finalServiceSchedule = service_schedule;
-    if (!service_schedule || service_schedule.length === 0) {
+    let finalServiceSchedule = service_schedule || [];
+    if ((!service_schedule || service_schedule.length === 0) && startDate && endDate) {
       finalServiceSchedule = generateServiceSchedule(
         startDate,
         endDate,
@@ -294,8 +355,8 @@ const CreateAMC = async (req, res) => {
     }
 
     // Generate payment schedule if not provided
-    let finalPaymentSchedule = payment_schedule;
-    if (!payment_schedule || payment_schedule.length === 0) {
+    let finalPaymentSchedule = payment_schedule || [];
+    if ((!payment_schedule || payment_schedule.length === 0) && startDate && endDate && totalAmountNum != null) {
       finalPaymentSchedule = generatePaymentSchedule(
         startDate,
         endDate,
@@ -304,10 +365,13 @@ const CreateAMC = async (req, res) => {
       );
     }
 
-    const amc = await AMC.create({
+    const amcData = {
       contract_number,
-      elevator_id,
-      project_id,
+      elevator_ids: is_external ? [] : (Array.isArray(elevator_ids) ? elevator_ids : (elevator_ids ? [elevator_ids] : [])),
+      project_id: is_external ? null : project_id,
+      is_external: !!is_external,
+      external_project_name: is_external ? external_project_name : null,
+      external_elevator_names: is_external ? (Array.isArray(external_elevator_names) ? external_elevator_names : (external_elevator_names ? [external_elevator_names] : [])) : [],
       client_name,
       client_email,
       client_mobile,
@@ -315,38 +379,76 @@ const CreateAMC = async (req, res) => {
       contract_start_date: startDate,
       contract_end_date: endDate,
       contract_duration_months: durationMonths,
-      contract_amount: Number(contract_amount),
-      gst_amount: Number(gst_amount || 0),
+      contract_amount: contract_amount != null ? Number(contract_amount) : null,
+      gst_amount: gst_amount != null ? Number(gst_amount) : 0,
       total_amount: totalAmountNum,
       payment_frequency: payment_frequency || "Annual",
       service_frequency: service_frequency || "Monthly",
       service_schedule: finalServiceSchedule,
       payment_schedule: finalPaymentSchedule,
       total_paid_amount: 0,
-      remaining_amount: totalAmountNum,
-      contract_status: startDate <= new Date() ? "Active" : "Pending",
+      remaining_amount: totalAmountNum || 0,
+      contract_status: is_draft ? "Draft" : (startDate && startDate <= new Date() ? "Active" : "Pending"),
       auto_renewal: auto_renewal || false,
       renewal_reminder_days: renewal_reminder_days != null ? Number(renewal_reminder_days) : 30,
       amc_type: amc_type || "Comprehensive",
       total_services_completed: 0,
-      total_services_pending: finalServiceSchedule.length,
+      total_services_pending: finalServiceSchedule?.length || 0,
       terms_and_conditions,
       additional_notes,
       assigned_technician,
       branch_id,
-      files: Array.isArray(files) ? files : undefined,
-    });
+      files: Array.isArray(files) ? files : [],
+      type_of_elevator,
+      operation_type,
+      passenger_capacity,
+      speed,
+      no_of_floors,
+      stops,
+      opening_type,
+      lift_well_width,
+      lift_well_depth,
+      car_enclouser_type,
+      car_flooring_type,
+      car_door_type,
+      landing_door_type,
+      clear_opening_height,
+      clear_opening_width,
+      false_ceiling,
+      ms_door_frames,
+      ard_system,
+      overload_sensor,
+      telephone,
+      fan_blower,
+      lop_cop,
+      opening_center_telescope_no,
+      handrail_box,
+      rfid,
+      tft_display,
+      seal_size,
+      rated_load,
+      cabin_height,
+    };
 
-    const user_details = await Users.findById(req.auth.id);
-    await ActivityLog.create({
-      user_id: req.auth?.id || null,
-      user_name: user_details.name,
-      action: "ADD_AMC",
-      type: "Create",
-      description: `${user_details.name} has created AMC contract ${contract_number}.`,
-      title: "AMC Contract Added",
-      project_id: project_id,
-    });
+
+    const amc = await AMC.create(amcData);
+
+    try {
+      const user_details = await Users.findById(req.auth.id);
+      if (user_details) {
+        await ActivityLog.create({
+          user_id: req.auth?.id || null,
+          user_name: user_details.name,
+          action: "ADD_AMC",
+          type: "Create",
+          description: `${user_details.name} has created AMC contract ${contract_number}.`,
+          title: "AMC Contract Added",
+          project_id: project_id,
+        });
+      }
+    } catch (logError) {
+      console.error("[CreateAMC] ActivityLog Error:", logError);
+    }
 
     return ResponseOk(res, 201, "AMC contract created successfully", amc);
   } catch (error) {
@@ -376,6 +478,8 @@ const ViewAMC = async (req, res) => {
       sortOrder = "desc",
     } = req.query;
 
+    const cleanBranchId = (branchId && branchId !== "null" && branchId !== "undefined") ? branchId : null;
+
     const matchStage = {};
 
     // Branch visibility logic
@@ -388,14 +492,14 @@ const ViewAMC = async (req, res) => {
         const role = await Roles.findOne({ id: userRole.role_id });
 
         if (role && role.name !== "Admin") {
-          if (branchId) {
+          if (cleanBranchId) {
             const user = await Users.findById(req.auth.id);
             const isAssigned = user.branches.some(
-              (b) => b.toString() === branchId
+              (b) => b.toString() === cleanBranchId
             );
 
             if (isAssigned) {
-              matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+              matchStage.branch_id = new mongoose.Types.ObjectId(cleanBranchId);
             } else {
               return ErrorHandler(
                 res,
@@ -407,14 +511,14 @@ const ViewAMC = async (req, res) => {
             const user = await Users.findById(req.auth.id);
             matchStage.branch_id = { $in: user.branches };
           }
-        } else if (branchId) {
-          matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+        } else if (cleanBranchId) {
+          matchStage.branch_id = new mongoose.Types.ObjectId(cleanBranchId);
         }
       }
     }
 
     if (elevator_id) {
-      matchStage.elevator_id = new mongoose.Types.ObjectId(elevator_id);
+      matchStage.elevator_ids = new mongoose.Types.ObjectId(elevator_id);
     }
 
     if (project_id) {
@@ -469,9 +573,9 @@ const ViewAMC = async (req, res) => {
       {
         $lookup: {
           from: "elevators",
-          localField: "elevator_id",
+          localField: "elevator_ids",
           foreignField: "_id",
-          as: "elevator",
+          as: "elevators",
         },
       },
       {
@@ -482,15 +586,37 @@ const ViewAMC = async (req, res) => {
           as: "project",
         },
       },
-      { $unwind: { path: "$elevator", preserveNullAndEmptyArrays: true } },
       { $unwind: { path: "$project", preserveNullAndEmptyArrays: true } },
       {
         $addFields: {
-          elevator_name: "$elevator.elevator_name",
-          project_name: "$project.site_name",
+          elevator_names: {
+            $concatArrays: [
+              { $ifNull: ["$elevators.elevator_name", []] },
+              { $ifNull: ["$external_elevator_names", []] }
+            ]
+          },
+          elevator_name: {
+            $reduce: {
+              input: {
+                $concatArrays: [
+                  { $ifNull: ["$elevators.elevator_name", []] },
+                  { $ifNull: ["$external_elevator_names", []] }
+                ]
+              },
+              initialValue: "",
+              in: {
+                $cond: {
+                  if: { $eq: ["$$value", ""] },
+                  then: "$$this",
+                  else: { $concat: ["$$value", ", ", "$$this"] }
+                }
+              }
+            }
+          },
+          project_name: { $ifNull: ["$project.site_name", "$external_project_name"] },
         },
       },
-      { $project: { elevator: 0, project: 0 } },
+      { $project: { elevators: 0, project: 0 } },
       { $sort: { [sortField]: sortDir } },
       { $skip: skip },
       { $limit: limitNum },
@@ -615,8 +741,9 @@ const GetAMCById = async (req, res) => {
       }
     }
 
+    // Populate multiple elevators
     const amc = await AMC.findOne(query)
-      .populate("elevator_id", "elevator_name type_of_elevator")
+      .populate("elevator_ids", "elevator_name type_of_elevator")
       .populate("project_id", "site_name site_address client_name")
       .populate("branch_id", "name");
 
@@ -625,6 +752,14 @@ const GetAMCById = async (req, res) => {
     }
 
     const amcObj = amc.toObject ? amc.toObject() : amc;
+
+    // Resolved names for external projects/elevators to match ViewAMC aggregation
+    amcObj.project_name = amc.project_id?.site_name || amc.external_project_name;
+    const internalNames = amc.elevator_ids?.map(e => e.elevator_name) || [];
+    const externalNames = amc.external_elevator_names || [];
+    amcObj.elevator_names = [...internalNames, ...externalNames];
+    amcObj.elevator_name = amcObj.elevator_names.join(", ");
+
     attachDisplayStatus(amcObj);
 
     return ResponseOk(res, 200, "AMC contract retrieved successfully", amcObj);
@@ -703,7 +838,43 @@ const UpdateAMC = async (req, res) => {
       "service_schedule",
       "payment_schedule",
       "files",
+      "is_external",
+      "external_project_name",
+      "external_elevator_names",
+      "elevator_ids",
+      "type_of_elevator",
+      "operation_type",
+      "passenger_capacity",
+      "speed",
+      "no_of_floors",
+      "stops",
+      "opening_type",
+      "lift_well_width",
+      "lift_well_depth",
+      "car_enclouser_type",
+      "car_flooring_type",
+      "car_door_type",
+      "landing_door_type",
+      "clear_opening_height",
+      "clear_opening_width",
+      "false_ceiling",
+      "ms_door_frames",
+      "ard_system",
+      "overload_sensor",
+      "telephone",
+      "fan_blower",
+      "lop_cop",
+      "opening_center_telescope_no",
+      "handrail_box",
+      "rfid",
+      "tft_display",
+      "seal_size",
+      "rated_load",
+      "cabin_height",
+      "gst_percentage",
     ];
+
+
 
     const updateData = {};
     for (const key of allowedFields) {
@@ -717,10 +888,28 @@ const UpdateAMC = async (req, res) => {
       }
     }
 
+    // Auto: Total amount = Contract amount + GST
+    if (updateData.contract_amount !== undefined || updateData.gst_amount !== undefined) {
+      const cAmt = updateData.contract_amount !== undefined ? Number(updateData.contract_amount) : Number(checkAMC.contract_amount || 0);
+      const gAmt = updateData.gst_amount !== undefined ? Number(updateData.gst_amount) : Number(checkAMC.gst_amount || 0);
+      updateData.total_amount = cAmt + gAmt;
+    }
+
     // Recalculate remaining amount if total_amount or total_paid_amount changed
     if (updateData.total_amount !== undefined) {
       updateData.remaining_amount =
         updateData.total_amount - (checkAMC.total_paid_amount || 0);
+    }
+
+    // Auto: Duration calculation if dates are updated
+    if (updateData.contract_start_date || updateData.contract_end_date) {
+      const start = updateData.contract_start_date || checkAMC.contract_start_date;
+      const end = updateData.contract_end_date || checkAMC.contract_end_date;
+      if (start && end && !req.body.contract_duration_months) {
+        updateData.contract_duration_months = Math.round(
+          (new Date(end) - new Date(start)) / (1000 * 60 * 60 * 24 * 30.44)
+        );
+      }
     }
 
     const updatedAMC = await AMC.findByIdAndUpdate(
@@ -733,22 +922,95 @@ const UpdateAMC = async (req, res) => {
       return ErrorHandler(res, 404, "AMC contract not found");
     }
 
+    // Handle Draft -> Active/Pending transition or maintaining Draft status
+    const is_draft = req.body.is_draft;
+    if (is_draft === true) {
+      updatedAMC.contract_status = "Draft";
+    } else if (is_draft === false && updatedAMC.contract_status === "Draft") {
+      // Transitioning from Draft to Active/Pending - validate required fields
+      const missingFields = [];
+      const isExt = updatedAMC.is_external;
+      if (!isExt) {
+        if (!updatedAMC.elevator_ids || updatedAMC.elevator_ids.length === 0) missingFields.push("Elevators");
+        if (!updatedAMC.project_id) missingFields.push("Project");
+      } else {
+        if (!updatedAMC.external_project_name) missingFields.push("New AMC Name");
+        if (!updatedAMC.external_elevator_names || updatedAMC.external_elevator_names.length === 0) missingFields.push("New Elevator Names");
+      }
+      if (!updatedAMC.client_name) missingFields.push("Client Name");
+      if (!updatedAMC.client_mobile) missingFields.push("Client Mobile");
+      if (!updatedAMC.contract_start_date) missingFields.push("Contract Start Date");
+      if (!updatedAMC.contract_end_date) missingFields.push("Contract End Date");
+      if (updatedAMC.contract_amount == null || updatedAMC.contract_amount === "") missingFields.push("Contract Amount");
+      if (updatedAMC.total_amount == null || updatedAMC.total_amount === "") missingFields.push("Total Amount");
+
+      if (missingFields.length > 0) {
+        // Rollback status if validation fails (actually we haven't saved the status change yet, but we should return error)
+        return ErrorHandler(
+          res,
+          400,
+          `Cannot submit AMC. Missing required fields: ${missingFields.join(", ")}`
+        );
+      }
+
+      // If validation passes, set proper status based on date
+      const startDate = new Date(updatedAMC.contract_start_date);
+      updatedAMC.contract_status = startDate <= new Date() ? "Active" : "Pending";
+    }
+
     // Recalculate total_paid_amount if payment_schedule was updated
     if (updateData.payment_schedule) {
       const totalPaid = updatedAMC.payment_schedule
         .filter((payment) => payment.payment_status === "Paid")
         .reduce((sum, payment) => sum + (payment.amount || 0), 0);
-      
+
       updatedAMC.total_paid_amount = totalPaid;
       updatedAMC.remaining_amount = updatedAMC.total_amount - updatedAMC.total_paid_amount;
     }
 
-    // Auto-update contract status if dates or amounts changed
-    if (updateData.contract_start_date || updateData.contract_end_date || 
-        updateData.total_amount || updateData.total_paid_amount || updateData.payment_schedule) {
+    // Auto-update contract status if dates or amounts changed (and not a draft)
+    if (updatedAMC.contract_status !== "Draft" && (updateData.contract_start_date || updateData.contract_end_date ||
+      updateData.total_amount || updateData.total_paid_amount || updateData.payment_schedule)) {
       await updateContractStatus(updatedAMC);
-      await updatedAMC.save();
     }
+
+    // Auto-generate schedules if missing or if fundamental fields changed (and it's a draft or schedules are empty)
+    const fundamentalChanged = updateData.contract_start_date ||
+      updateData.contract_end_date ||
+      updateData.service_frequency ||
+      updateData.payment_frequency ||
+      updateData.total_amount;
+
+    if (fundamentalChanged || (updatedAMC.service_schedule.length === 0 && updatedAMC.contract_start_date && updatedAMC.contract_end_date)) {
+      if (updatedAMC.contract_status === "Draft" || updatedAMC.service_schedule.length === 0) {
+        const startDate = updatedAMC.contract_start_date;
+        const endDate = updatedAMC.contract_end_date;
+
+        if (startDate && endDate) {
+          // Generate/Regenerate service schedule
+          if (!req.body.service_schedule || req.body.service_schedule.length === 0) {
+            updatedAMC.service_schedule = generateServiceSchedule(
+              startDate,
+              endDate,
+              updatedAMC.service_frequency || "Monthly"
+            );
+            updatedAMC.total_services_pending = updatedAMC.service_schedule.length;
+          }
+
+          // Generate/Regenerate payment schedule
+          if ((!req.body.payment_schedule || req.body.payment_schedule.length === 0) && updatedAMC.total_amount != null) {
+            updatedAMC.payment_schedule = generatePaymentSchedule(
+              startDate,
+              endDate,
+              updatedAMC.payment_frequency || "Annual",
+              updatedAMC.total_amount
+            );
+          }
+        }
+      }
+    }
+
+    await updatedAMC.save();
 
     const user_details = await Users.findById(req.auth.id);
     await ActivityLog.create({
@@ -813,7 +1075,7 @@ const UpdateServiceSchedule = async (req, res) => {
 
     // Update service schedule item
     const oldServiceStatus = amc.service_schedule[serviceIndex].service_status;
-    
+
     Object.keys(updateData).forEach((key) => {
       if (updateData[key] !== undefined) {
         amc.service_schedule[serviceIndex][key] = updateData[key];
@@ -825,7 +1087,7 @@ const UpdateServiceSchedule = async (req, res) => {
       amc.total_services_completed = (amc.total_services_completed || 0) + 1;
       amc.total_services_pending = Math.max(0, (amc.total_services_pending || 0) - 1);
       amc.last_service_date = updateData.completed_date || new Date();
-      
+
       // Calculate next service date
       if (amc.service_frequency) {
         const nextServiceDate = new Date(amc.service_schedule[serviceIndex].scheduled_date);
@@ -931,13 +1193,13 @@ const UpdatePaymentSchedule = async (req, res) => {
     const totalPaid = amc.payment_schedule
       .filter((payment) => payment.payment_status === "Paid")
       .reduce((sum, payment) => sum + (payment.amount || 0), 0);
-    
+
     amc.total_paid_amount = totalPaid;
     amc.remaining_amount = amc.total_amount - amc.total_paid_amount;
-    
+
     // Auto-update contract status based on payment and dates
     await updateContractStatus(amc);
-    
+
     await amc.save();
 
     const user_details = await Users.findById(req.auth.id);
@@ -996,7 +1258,7 @@ const RenewAMC = async (req, res) => {
     }
 
     const oldAMC = await AMC.findOne(query)
-      .populate("elevator_id", "elevator_name")
+      .populate("elevator_ids", "elevator_name")
       .populate("project_id", "site_name");
     if (!oldAMC) {
       return ErrorHandler(res, 404, "AMC contract not found or access denied");
@@ -1023,7 +1285,10 @@ const RenewAMC = async (req, res) => {
 
     const newAMC = await AMC.create({
       contract_number: newContractNumber,
-      elevator_id: oldAMC.elevator_id,
+      elevator_ids: oldAMC.elevator_ids,
+      external_elevator_names: oldAMC.external_elevator_names,
+      is_external: oldAMC.is_external,
+      external_project_name: oldAMC.external_project_name,
       project_id: oldAMC.project_id,
       client_name: oldAMC.client_name,
       client_email: oldAMC.client_email,

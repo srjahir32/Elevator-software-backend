@@ -1,4 +1,6 @@
 const Branch = require('../../Models/Branch.model');
+const { Project } = require('../../Models/Project.model');
+const { AMC } = require('../../Models/AMC.model');
 const { ResponseOk, ErrorHandler } = require('../../Utils/ResponseHandler');
 const { ActivityLog } = require('../../Models/Activitylog.model');
 const { Users } = require('../../Models/User.model');
@@ -97,6 +99,24 @@ const UpdateBranch = async (req, res) => {
 const DeleteBranch = async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Check if branch is assigned to any projects
+        const projectCount = await Project.countDocuments({ branch_id: id });
+        if (projectCount > 0) {
+            return ErrorHandler(res, 400, `Cannot delete branch because it is linked to ${projectCount} active project(s). Please reassign the projects before deleting.`);
+        }
+
+        // Check if branch is assigned to any AMC contracts
+        const amcCount = await AMC.countDocuments({ branch_id: id });
+        if (amcCount > 0) {
+            return ErrorHandler(res, 400, `Cannot delete branch because it is linked to ${amcCount} active AMC contract(s). Please move these contracts to another branch first.`);
+        }
+
+        // Check if branch is assigned to any users
+        const userCount = await Users.countDocuments({ branches: id });
+        if (userCount > 0) {
+            return ErrorHandler(res, 400, `Cannot delete branch because it is assigned to ${userCount} user(s). Please remove this branch from user profiles before deleting.`);
+        }
 
         const deletedBranch = await Branch.findByIdAndDelete(id);
 

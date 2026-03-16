@@ -15,9 +15,12 @@ const MechanicalQCRouter = require("./Mechanical_QC/MechanicalQCRoutes");
 const ActivityLogsRouter = require("./ActivityLogs/LogsRoutes");
 const BranchRouter = require("./Branch/BranchRoutes");
 const AMCRouter = require("./AMC/AMCRoutes");
+const DeliveryChallanRouter = require("./DeliveryChallan/DeliveryChallanRoutes");
+const InvoiceRouter = require("./Invoice/InvoiceRoutes");
+const TechnicianRouter = require("./Technician/TechnicianRoutes");
 
 Routes.use("/auth", AuthRouter);
-// ... existing lines
+// ... existing codes
 Routes.use('/logs', ActivityLogsRouter);
 Routes.use('/branch', BranchRouter);
 Routes.use("/erector", ErectorRouter)
@@ -33,5 +36,8 @@ Routes.use('/delivery_form', DeliveryFormRouter);
 Routes.use('/mechanical_qc', MechanicalQCRouter);
 Routes.use('/logs', ActivityLogsRouter);
 Routes.use('/amc', AMCRouter);
+Routes.use('/challans', DeliveryChallanRouter);
+Routes.use('/invoices', InvoiceRouter);
+Routes.use('/technicians', TechnicianRouter);
 
 module.exports = Routes;

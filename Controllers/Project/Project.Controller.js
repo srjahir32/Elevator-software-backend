@@ -106,8 +106,10 @@ const ViewProject = async (req, res) => {
             const user = await Users.findById(req.auth.id);
             const isAssigned = user.branches.some(b => b.toString() === branchId);
 
-            if (isAssigned) {
+            if (isAssigned && branchId && branchId !== "null" && branchId !== "undefined") {
               matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+            } else if (isAssigned) {
+              // Ignore invalid branchId but keep isAssigned logic if needed
             } else {
               return ErrorHandler(res, 403, "You are not assigned to this branch");
             }
@@ -116,7 +118,7 @@ const ViewProject = async (req, res) => {
             const user = await Users.findById(req.auth.id);
             matchStage.branch_id = { $in: user.branches };
           }
-        } else if (req.query.branchId) {
+        } else if (req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined") {
           // Admins can filter by any branchId if provided
           matchStage.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
         }
@@ -499,8 +501,10 @@ const GetProjectShortDetails = async (req, res) => {
             const user = await Users.findById(req.auth.id);
             const isAssigned = user.branches.some(b => b.toString() === branchId);
 
-            if (isAssigned) {
+            if (isAssigned && branchId && branchId !== "null" && branchId !== "undefined") {
               matchConditions.branch_id = new mongoose.Types.ObjectId(branchId);
+            } else if (isAssigned) {
+              // Ignore invalid branchId
             } else {
               return ErrorHandler(res, 403, "You are not assigned to this branch");
             }
@@ -509,7 +513,7 @@ const GetProjectShortDetails = async (req, res) => {
             const user = await Users.findById(req.auth.id);
             matchConditions.branch_id = { $in: user.branches };
           }
-        } else if (req.query.branchId) {
+        } else if (req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined") {
           // Admins can filter by any branchId if provided
           matchConditions.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
         }

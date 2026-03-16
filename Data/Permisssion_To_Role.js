@@ -105,6 +105,14 @@ exports.PermissionsData = [
   { id: 81, permission_name: "Add AMC" },
   { id: 82, permission_name: "Edit AMC" },
   { id: 83, permission_name: "Delete AMC" },
+  { id: 84, permission_name: "View Challan" },
+  { id: 85, permission_name: "Add Challan" },
+  { id: 86, permission_name: "Edit Challan" },
+  { id: 87, permission_name: "Delete Challan" },
+  { id: 88, permission_name: "View Invoice" },
+  { id: 89, permission_name: "Add Invoice" },
+  { id: 90, permission_name: "Edit Invoice" },
+  { id: 91, permission_name: "Delete Invoice" },
 ];
 
 
@@ -192,6 +200,14 @@ exports.PermissionRolesData = [
   { id: 125, role_id: 1, permission_id: 81 }, // Add AMC
   { id: 126, role_id: 1, permission_id: 82 }, // Edit AMC
   { id: 127, role_id: 1, permission_id: 83 }, // Delete AMC
+  { id: 128, role_id: 1, permission_id: 84 }, // View Challan
+  { id: 129, role_id: 1, permission_id: 85 }, // Add Challan
+  { id: 130, role_id: 1, permission_id: 86 }, // Edit Challan
+  { id: 131, role_id: 1, permission_id: 87 }, // Delete Challan
+  { id: 132, role_id: 1, permission_id: 88 }, // View Invoice
+  { id: 133, role_id: 1, permission_id: 89 }, // Add Invoice
+  { id: 134, role_id: 1, permission_id: 90 }, // Edit Invoice
+  { id: 135, role_id: 1, permission_id: 91 }, // Delete Invoice
 
   // Manager (role_id: 3)
   { id: 79, role_id: 3, permission_id: 2 },  // View Project
