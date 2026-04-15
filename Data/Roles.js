@@ -10,4 +10,5 @@ exports.RolesData = [
     { id: 8, name: "Cashier" },
     { id: 9, name: "Purchase" },
     { id: 10, name: "Vapi_Purchase" },
+    { id: 11, name: "Technician" },
 ];

@@ -987,12 +987,17 @@ const GetProjectListDashboard = async (req, res) => {
   try {
     // 🔒 Build role-based match (same behavior as GetProjectShortDetails)
     const roleMatch = await getRoleBasedMatch(req);
+    const dashboardProjectMatch = {
+      ...roleMatch,
+      // Dashboard "Project List" and "Payments" should show only old-flow projects.
+      $or: [{ project_flow: "legacy" }, { project_flow: { $exists: false } }],
+    };
 
     const pipeline = [];
 
     // Put the match FIRST to reduce work in later stages
-    if (Object.keys(roleMatch).length > 0) {
-      pipeline.push({ $match: roleMatch });
+    if (Object.keys(dashboardProjectMatch).length > 0) {
+      pipeline.push({ $match: dashboardProjectMatch });
     }
 
     pipeline.push(

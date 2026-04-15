@@ -5,6 +5,10 @@ const InvoiceItemSchema = new mongoose.Schema({
     quantity: { type: Number, required: true, default: 1 },
     unit_price: { type: Number, required: true, default: 0 },
     total_price: { type: Number, required: true, default: 0 },
+    hsn_code: { type: String },
+    lift_label: { type: String },
+    is_challan_item: { type: Boolean },
+    challan_number: { type: String },
 });
 
 const InvoiceSchema = new mongoose.Schema(
@@ -26,6 +30,7 @@ const InvoiceSchema = new mongoose.Schema(
         client_address: { type: String },
         contract_id: { type: mongoose.Schema.Types.ObjectId, ref: "amc", default: null },
         challan_id: { type: mongoose.Schema.Types.ObjectId, ref: "delivery_challan", default: null },
+        quotation_id: { type: mongoose.Schema.Types.ObjectId, ref: "quotation", default: null },
         invoice_date: { type: Date, required: true, default: Date.now },
         due_date: { type: Date },
         subtotal: { type: Number, required: true, default: 0 },
@@ -35,7 +40,7 @@ const InvoiceSchema = new mongoose.Schema(
         balance_amount: { type: Number, default: 0 },
         status: {
             type: String,
-            enum: ["Draft", "Sent", "Partial Paid", "Paid", "Cancelled"],
+            enum: ["Draft", "Sent", "Issued", "Partial Paid", "Paid", "Cancelled", "Overdue"],
             default: "Draft",
         },
         items: [InvoiceItemSchema],
@@ -45,10 +50,10 @@ const InvoiceSchema = new mongoose.Schema(
     { timestamps: true, versionKey: false }
 );
 
-InvoiceSchema.index({ invoice_number: 1 });
 InvoiceSchema.index({ project_id: 1 });
 InvoiceSchema.index({ contract_id: 1 });
 InvoiceSchema.index({ challan_id: 1 });
+InvoiceSchema.index({ quotation_id: 1 });
 InvoiceSchema.index({ elevator_ids: 1 });
 
 const PaymentSchema = new mongoose.Schema(

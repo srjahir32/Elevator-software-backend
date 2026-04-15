@@ -54,6 +54,7 @@ const CreateProject = async (req, res) => {
       total_amount_project,
       payment_count_project,
       branch_id,
+      project_flow: "legacy",
     });
     const user_details = await Users.findById(req.auth.id)
     await ActivityLog.create({
@@ -84,7 +85,8 @@ const ViewProject = async (req, res) => {
       minReceived,
       maxReceived,
       minRemaining,
-      maxRemaining
+      maxRemaining,
+      flow,
     } = req.query;
 
     const matchStage = {};
@@ -133,6 +135,15 @@ const ViewProject = async (req, res) => {
       matchStage.aggrement_date = {};
       if (fromDate) matchStage.aggrement_date.$gte = new Date(fromDate);
       if (toDate) matchStage.aggrement_date.$lte = new Date(toDate);
+    }
+
+    // Keep both project flows isolated:
+    // - flow=pm => only PM/AMC projects
+    // - default  => legacy + records without project_flow
+    if (flow === "pm") {
+      matchStage.project_flow = "pm";
+    } else {
+      matchStage.$or = [{ project_flow: "legacy" }, { project_flow: { $exists: false } }];
     }
 
     const projects = await Project.aggregate([
@@ -478,8 +489,15 @@ const GetProjectShortDetails = async (req, res) => {
       minReceived,
       maxReceived,
       minRemaining,
-      maxRemaining
+      maxRemaining,
+      flow,
+      forAmc,
     } = req.query;
+
+    const forAmcList =
+      forAmc === "1" ||
+      forAmc === "true" ||
+      String(forAmc || "").toLowerCase() === "yes";
 
     const matchConditions = {};
 
@@ -491,9 +509,10 @@ const GetProjectShortDetails = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
 
         // If not Admin, enforce branch-based filtering
-        if (role && role.name !== "Admin") {
+        if (role && !isAdminRole) {
           const { branchId, supervisor: supervisorQuery } = req.query;
 
           if (branchId) {
@@ -511,9 +530,22 @@ const GetProjectShortDetails = async (req, res) => {
           } else {
             // If no branchId provided, return projects for ALL assigned branches
             const user = await Users.findById(req.auth.id);
-            matchConditions.branch_id = { $in: user.branches };
+            const branches = user.branches || [];
+            // AMC picker: PM projects may have branch_id unset — include null/unset so Directory projects appear
+            if (forAmcList) {
+              matchConditions.$and = matchConditions.$and || [];
+              matchConditions.$and.push({
+                $or: [
+                  { branch_id: { $in: branches } },
+                  { branch_id: null },
+                  { branch_id: { $exists: false } },
+                ],
+              });
+            } else {
+              matchConditions.branch_id = { $in: branches };
+            }
           }
-        } else if (req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined") {
+        } else if (isAdminRole && req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined") {
           // Admins can filter by any branchId if provided
           matchConditions.branch_id = new mongoose.Types.ObjectId(req.query.branchId);
         }
@@ -546,6 +578,22 @@ const GetProjectShortDetails = async (req, res) => {
       matchConditions.amount_remaining = {};
       if (minRemaining) matchConditions.amount_remaining.$gte = Number(minRemaining);
       if (maxRemaining) matchConditions.amount_remaining.$lte = Number(maxRemaining);
+    }
+
+    // Keep both project flows isolated on list screens:
+    // - flow=pm => only PM projects
+    // - forAmc  => PM + legacy (+ missing flag) so AMC can link any site project
+    // - default => legacy + records without project_flow
+    if (forAmcList) {
+      matchConditions.$or = [
+        { project_flow: "pm" },
+        { project_flow: "legacy" },
+        { project_flow: { $exists: false } },
+      ];
+    } else if (flow === "pm") {
+      matchConditions.project_flow = "pm";
+    } else {
+      matchConditions.$or = [{ project_flow: "legacy" }, { project_flow: { $exists: false } }];
     }
 
     const pipeline = [
@@ -606,6 +654,8 @@ const GetProjectShortDetails = async (req, res) => {
         aggrement_no: 1,
         aggrement_date: 1,
         site_address: 1,
+        area: 1,
+        city: 1,
         client_name: 1,
         client_mobile: 1,
         client_email: 1,

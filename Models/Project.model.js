@@ -17,7 +17,15 @@ const ProjectSchema = new mongoose.Schema(
     },
     site_address: {
       type: String,
-      required: true,
+      default: "",
+    },
+    city: {
+      type: String,
+      default: null,
+    },
+    area: {
+      type: String,
+      default: null,
     },
     client_name: {
       type: String,
@@ -31,13 +39,18 @@ const ProjectSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+    /** Additional client emails (AMC / PM layer); first may mirror client_email */
+    client_emails: {
+      type: [String],
+      default: [],
+    },
     gst_no: {
       type: String,
       required: false,
     },
     payment_amount: {
       type: Number,
-      required: true,
+      default: 0,
     },
     additional_notes: {
       type: String,
@@ -45,7 +58,7 @@ const ProjectSchema = new mongoose.Schema(
     },
     Site_Supervisor: {
       type: String,
-      required: true,
+      default: "—",
     },
     cash_amount_project: {
       type: Number,
@@ -77,6 +90,16 @@ const ProjectSchema = new mongoose.Schema(
       ref: "branch",
       required: false, // Set to false to avoid breaking existing data until migration
     },
+    original_project_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "project",
+      default: null,
+    },
+    project_flow: {
+      type: String,
+      enum: ["legacy", "pm"],
+      default: "legacy",
+    },
   },
   {
     timestamps: true,
@@ -103,6 +126,11 @@ const ElevatorSchema = new mongoose.Schema(
       required: true,
     },
     operation_type: {
+      type: String,
+      default: null,
+    },
+    /** OEM / supplier label (project-management layer) */
+    lift_maker: {
       type: String,
       default: null,
     },

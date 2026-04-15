@@ -1,3 +1,4 @@
+/** @deprecated For this repo, seed with `superadmin` MakeData instead — challan/invoice IDs are now 30–37. */
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const { Permissions, Role_with_permission } = require('./Models/User.model');

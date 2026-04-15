@@ -1,0 +1,26 @@
+const { Router } = require("express");
+
+const { Project } = require('../../Models/Project.model')
+const { CreateProject, ViewProject, UpdateProject, ViewListOfSupervisors, GetProjectShortDetails, GetProjectDetailsById, ViewProjectOverviewById, DeleteProject, GetProjectShortDetailsExtra, GetProjectDetailsByIdExtra } = require("../../Controllers/Project/Project.Controller");
+const { createPmProject, getPmProjectDetails, updatePmProject, deletePmProject } = require("../../Controllers/Project/ProjectManagement.Controller");
+
+
+const ProjectRouter = Router();
+
+ProjectRouter.post('/pm', createPmProject);
+ProjectRouter.get('/pm_details', getPmProjectDetails);
+ProjectRouter.put('/pm', updatePmProject);
+ProjectRouter.delete('/pm', deletePmProject);
+
+ProjectRouter.post('/add_project', CreateProject);
+ProjectRouter.get('/view_project', ViewProject);
+ProjectRouter.put('/update_project', UpdateProject);
+ProjectRouter.get('/get_supervisor_list', ViewListOfSupervisors);
+ProjectRouter.get('/get_project_short_details', GetProjectShortDetails);
+ProjectRouter.get('/get_project_details_by_id', GetProjectDetailsById);
+ProjectRouter.get('/get_project_overview_by_id', ViewProjectOverviewById);
+ProjectRouter.post('/delete_project', DeleteProject);
+ProjectRouter.get('/get_project_short_details_extra', GetProjectShortDetailsExtra);
+ProjectRouter.get('/get_project_details_by_id_extra', GetProjectDetailsByIdExtra);
+
+module.exports = ProjectRouter;

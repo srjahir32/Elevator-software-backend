@@ -279,7 +279,7 @@ const GetElevatorByProjectId = async (req, res) => {
     }
     const elevator = await Elevators.find({ project_id: projectId })
       .select(
-        "_id project_id elevator_name type_of_elevator operation_type passenger_capacity no_of_floors stops speed seal_size rated_load cabin_height opening_center_telescope_no handrail_box rfid tft_display"
+        "_id project_id elevator_name type_of_elevator operation_type lift_maker passenger_capacity no_of_floors stops speed seal_size rated_load cabin_height opening_center_telescope_no handrail_box rfid tft_display"
       )
       .sort({ createdAt: -1 });
     if (!elevator) {

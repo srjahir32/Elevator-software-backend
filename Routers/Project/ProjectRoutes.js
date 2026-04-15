@@ -2,9 +2,20 @@ const { Router } = require("express");
 
 const { Project } = require('../../Models/Project.model')
 const { CreateProject, ViewProject, UpdateProject, ViewListOfSupervisors, GetProjectShortDetails, GetProjectDetailsById, ViewProjectOverviewById, DeleteProject } = require("../../Controllers/Project/Project.Controller");
+const {
+  createPmProject,
+  getPmProjectDetails,
+  updatePmProject,
+  deletePmProject,
+} = require("../../Controllers/Project/ProjectManagement.Controller");
 
 
 const ProjectRouter = Router();
+
+ProjectRouter.post('/pm', createPmProject);
+ProjectRouter.get('/pm_details', getPmProjectDetails);
+ProjectRouter.put('/pm', updatePmProject);
+ProjectRouter.delete('/pm', deletePmProject);
 
 ProjectRouter.post('/add_project', CreateProject);
 ProjectRouter.get('/view_project', ViewProject);

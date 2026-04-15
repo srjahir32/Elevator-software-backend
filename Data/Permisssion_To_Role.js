@@ -160,6 +160,7 @@ exports.PermissionRolesData = [
   { id: 40, role_id: 1, permission_id: 40 },
   { id: 41, role_id: 1, permission_id: 41 },
   { id: 42, role_id: 1, permission_id: 42 },
+  { id: 43, role_id: 1, permission_id: 43 },
   { id: 44, role_id: 1, permission_id: 44 },
   { id: 45, role_id: 1, permission_id: 45 },
   { id: 46, role_id: 1, permission_id: 46 },
@@ -260,4 +261,10 @@ exports.PermissionRolesData = [
   { id: 120, role_id: 10, permission_id: 62 }, // View Vender list
   { id: 121, role_id: 10, permission_id: 66 }, // View Erector list
   { id: 122, role_id: 10, permission_id: 71 }, // View Notification list
+
+  // Technician (role_id: 11)
+  { id: 136, role_id: 11, permission_id: 13 }, // View Dashboard
+  { id: 137, role_id: 11, permission_id: 80 }, // View AMC
+  { id: 138, role_id: 11, permission_id: 84 }, // View Challan
+  { id: 139, role_id: 11, permission_id: 88 }, // View Invoice
 ]

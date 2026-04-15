@@ -1,3 +1,4 @@
+/** @deprecated For this repo, seed with `superadmin` MakeData instead — technician IDs are now 38–41. */
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const { Permissions, Role_with_permission } = require('./Models/User.model');

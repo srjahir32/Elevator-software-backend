@@ -24,10 +24,20 @@ const generateInvoiceNumber = async () => {
     return `${prefix}${sequence.toString().padStart(4, "0")}`;
 };
 
+const normalizeInvoiceType = (rawType) => {
+    const t = String(rawType || "").trim().toLowerCase();
+    if (!t) return "";
+    if (t === "amc" || t === "amc annual" || t === "partial") return "AMC";
+    if (t === "spare" || t === "spare parts" || t === "additional charges") return "SPARE";
+    if (t === "combined") return "COMBINED";
+    return String(rawType || "").trim().toUpperCase();
+};
+
 const CreateInvoice = async (req, res) => {
     try {
         const {
             invoice_type,
+            amc_id,
             project_id,
             is_external = false,
             external_project_name,
@@ -46,30 +56,65 @@ const CreateInvoice = async (req, res) => {
             branch_id
         } = req.body;
 
-        if (!invoice_type) {
+        const normalizedInvoiceType = normalizeInvoiceType(invoice_type);
+        if (!normalizedInvoiceType) {
             return ErrorHandler(res, 400, "Invoice Type is required");
         }
 
-        if (is_external && !external_project_name) {
+        let resolvedProjectId = project_id || null;
+        let resolvedIsExternal = !!is_external;
+        let resolvedExternalProjectName = external_project_name || "";
+        let resolvedClientName = client_name || "";
+        let resolvedClientEmail = client_email || "";
+        let resolvedClientMobile = client_mobile || "";
+        let resolvedClientAddress = client_address || "";
+        let resolvedElevatorIds = Array.isArray(elevator_ids) ? elevator_ids : [];
+        let resolvedExternalElevatorNames = Array.isArray(external_elevator_names) ? external_elevator_names : [];
+        let resolvedContractId = contract_id && contract_id !== "" ? contract_id : null;
+        let resolvedBranchId = branch_id && branch_id !== "" ? branch_id : null;
+
+        const amcIdForLookup = amc_id || resolvedContractId;
+        if (amcIdForLookup && mongoose.Types.ObjectId.isValid(String(amcIdForLookup))) {
+            const amc = await AMC.findById(amcIdForLookup).lean();
+            if (amc) {
+                if (!resolvedProjectId && amc.project_id) resolvedProjectId = amc.project_id;
+                if (!resolvedContractId) resolvedContractId = amc._id;
+                if (!is_external) resolvedIsExternal = !!amc.is_external;
+                if (!resolvedExternalProjectName) resolvedExternalProjectName = amc.external_project_name || "";
+                if (!resolvedClientName) resolvedClientName = amc.client_name || "";
+                if (!resolvedClientEmail) resolvedClientEmail = amc.client_email || "";
+                if (!resolvedClientMobile) resolvedClientMobile = amc.client_mobile || "";
+                if (!resolvedClientAddress) resolvedClientAddress = amc.client_address || "";
+                if (resolvedElevatorIds.length === 0) {
+                    resolvedElevatorIds = Array.isArray(amc.elevator_ids) ? amc.elevator_ids : [];
+                }
+                if (resolvedExternalElevatorNames.length === 0) {
+                    resolvedExternalElevatorNames = Array.isArray(amc.external_elevator_names) ? amc.external_elevator_names : [];
+                }
+                if (!resolvedBranchId && amc.branch_id) resolvedBranchId = amc.branch_id;
+            }
+        }
+
+        if (resolvedIsExternal && !resolvedExternalProjectName) {
             return ErrorHandler(res, 400, "New AMC Name is required");
         }
 
-        if (!is_external && !project_id) {
+        if (!resolvedIsExternal && !resolvedProjectId) {
             return ErrorHandler(res, 400, "Project is required");
         }
 
         // Clean up optional ObjectIds
-        const safe_project_id = (is_external || !project_id) ? null : project_id;
-        const safe_elevator_ids = (is_external || !elevator_ids) ? [] : elevator_ids;
-        const safe_external_elevator_names = is_external ? external_elevator_names : [];
-        const cleanContractId = contract_id && contract_id !== "" ? contract_id : null;
+        const safe_project_id = (resolvedIsExternal || !resolvedProjectId) ? null : resolvedProjectId;
+        const safe_elevator_ids = (resolvedIsExternal || !resolvedElevatorIds) ? [] : resolvedElevatorIds;
+        const safe_external_elevator_names = resolvedIsExternal ? resolvedExternalElevatorNames : [];
+        const cleanContractId = resolvedContractId;
         const cleanChallanId = challan_id && challan_id !== "" ? challan_id : null;
-        const cleanBranchId = branch_id && branch_id !== "" ? branch_id : null;
+        const cleanBranchId = resolvedBranchId;
 
         let finalItems = items || [];
 
         // If AMC Invoice and no items provided, try to fetch from contract
-        if (invoice_type === "AMC" && cleanContractId && finalItems.length === 0) {
+        if (normalizedInvoiceType === "AMC" && cleanContractId && finalItems.length === 0) {
             const contract = await AMC.findById(cleanContractId);
             if (contract) {
                 finalItems.push({
@@ -82,7 +127,7 @@ const CreateInvoice = async (req, res) => {
         }
 
         // If Spare Invoice and no items provided, try to fetch from challan
-        if (invoice_type === "SPARE" && cleanChallanId && finalItems.length === 0) {
+        if (normalizedInvoiceType === "SPARE" && cleanChallanId && finalItems.length === 0) {
             const challan = await DeliveryChallan.findById(cleanChallanId);
             if (challan) {
                 if (challan.status !== "Delivered") {
@@ -104,14 +149,14 @@ const CreateInvoice = async (req, res) => {
 
         const newInvoice = await Invoice.create({
             invoice_number,
-            invoice_type,
+            invoice_type: normalizedInvoiceType,
             project_id: safe_project_id,
-            is_external,
-            external_project_name,
-            client_name,
-            client_email,
-            client_mobile,
-            client_address,
+            is_external: resolvedIsExternal,
+            external_project_name: resolvedExternalProjectName || null,
+            client_name: resolvedClientName || null,
+            client_email: resolvedClientEmail || null,
+            client_mobile: resolvedClientMobile || null,
+            client_address: resolvedClientAddress || null,
             elevator_ids: safe_elevator_ids,
             external_elevator_names: safe_external_elevator_names,
             contract_id: cleanContractId,
@@ -133,7 +178,7 @@ const CreateInvoice = async (req, res) => {
             user_name: user?.name,
             action: "CREATE_INVOICE",
             type: "Create",
-            description: `Invoice ${invoice_number} created for project ${is_external ? external_project_name : project_id}`,
+            description: `Invoice ${invoice_number} created for project ${resolvedIsExternal ? resolvedExternalProjectName : resolvedProjectId}`,
             title: "Invoice Created",
             project_id: safe_project_id
         });
@@ -171,6 +216,63 @@ const GetInvoices = async (req, res) => {
     }
 };
 
+const GetInvoiceStats = async (req, res) => {
+    try {
+        const branchRaw = req.query.branch_id || req.query.branchId;
+        const query = {};
+        if (
+            branchRaw &&
+            branchRaw !== "null" &&
+            branchRaw !== "undefined" &&
+            mongoose.Types.ObjectId.isValid(String(branchRaw))
+        ) {
+            query.branch_id = new mongoose.Types.ObjectId(String(branchRaw));
+        }
+
+        const [total, draft, sent, issued, partialPaid, paid, cancelled, overdue] = await Promise.all([
+            Invoice.countDocuments(query),
+            Invoice.countDocuments({ ...query, status: "Draft" }),
+            Invoice.countDocuments({ ...query, status: "Sent" }),
+            Invoice.countDocuments({ ...query, status: "Issued" }),
+            Invoice.countDocuments({ ...query, status: "Partial Paid" }),
+            Invoice.countDocuments({ ...query, status: "Paid" }),
+            Invoice.countDocuments({ ...query, status: "Cancelled" }),
+            Invoice.countDocuments({ ...query, status: "Overdue" }),
+        ]);
+
+        const amountAgg = await Invoice.aggregate([
+            { $match: query },
+            {
+                $group: {
+                    _id: null,
+                    total_amount: { $sum: { $ifNull: ["$total_amount", 0] } },
+                    paid_amount: { $sum: { $ifNull: ["$paid_amount", 0] } },
+                    balance_amount: { $sum: { $ifNull: ["$balance_amount", 0] } },
+                },
+            },
+        ]);
+
+        const summary = amountAgg[0] || { total_amount: 0, paid_amount: 0, balance_amount: 0 };
+
+        return ResponseOk(res, 200, "Invoice stats", {
+            total,
+            draft,
+            sent,
+            issued,
+            partial_paid: partialPaid,
+            paid,
+            cancelled,
+            overdue,
+            total_amount: summary.total_amount || 0,
+            paid_amount: summary.paid_amount || 0,
+            balance_amount: summary.balance_amount || 0,
+        });
+    } catch (error) {
+        console.error("[GetInvoiceStats]", error);
+        return ErrorHandler(res, 500, "Server error while fetching invoice stats");
+    }
+};
+
 const GetInvoiceById = async (req, res) => {
     try {
         const invoice = await Invoice.findById(req.params.id)
@@ -203,9 +305,40 @@ const MarkInvoiceSent = async (req, res) => {
     }
 };
 
+const INVOICE_STATUSES = ["Draft", "Sent", "Issued", "Partial Paid", "Paid", "Cancelled", "Overdue"];
+
+const UpdateInvoiceStatus = async (req, res) => {
+    try {
+        const { status } = req.body;
+        if (!status) {
+            return ErrorHandler(res, 400, "Status is required");
+        }
+        if (!INVOICE_STATUSES.includes(status)) {
+            return ErrorHandler(res, 400, "Invalid status");
+        }
+
+        const invoice = await Invoice.findById(req.params.id);
+        if (!invoice) return ErrorHandler(res, 404, "Invoice not found");
+        if (invoice.status === "Cancelled") {
+            return ErrorHandler(res, 400, "Cannot update a cancelled invoice");
+        }
+
+        const updated = await Invoice.findByIdAndUpdate(
+            req.params.id,
+            { status },
+            { new: true, runValidators: true }
+        );
+        return ResponseOk(res, 200, "Invoice status updated", updated);
+    } catch (error) {
+        console.error("[UpdateInvoiceStatus]", error);
+        return ErrorHandler(res, 500, "Server error while updating invoice status");
+    }
+};
+
 const AddPayment = async (req, res) => {
     try {
-        const { invoice_id, payment_date, payment_mode, amount, reference_number, remarks } = req.body;
+        const { payment_date, payment_mode, amount, reference_number, remarks } = req.body;
+        const invoice_id = req.body.invoice_id || req.params.id;
 
         if (!invoice_id || !amount) {
             return ErrorHandler(res, 400, "Invoice ID and Amount are required");
@@ -246,7 +379,9 @@ const AddPayment = async (req, res) => {
 module.exports = {
     CreateInvoice,
     GetInvoices,
+    GetInvoiceStats,
     GetInvoiceById,
     MarkInvoiceSent,
+    UpdateInvoiceStatus,
     AddPayment
 };

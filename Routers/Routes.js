@@ -18,6 +18,9 @@ const AMCRouter = require("./AMC/AMCRoutes");
 const DeliveryChallanRouter = require("./DeliveryChallan/DeliveryChallanRoutes");
 const InvoiceRouter = require("./Invoice/InvoiceRoutes");
 const TechnicianRouter = require("./Technician/TechnicianRoutes");
+const ComplaintRouter = require("./Complaint/ComplaintRoutes");
+const LicenseeRouter = require("./Licensee/LicenseeRoutes");
+const QuotationRouter = require("./Quotation/QuotationRoutes");
 
 Routes.use("/auth", AuthRouter);
 // ... existing codes
@@ -39,5 +42,8 @@ Routes.use('/amc', AMCRouter);
 Routes.use('/challans', DeliveryChallanRouter);
 Routes.use('/invoices', InvoiceRouter);
 Routes.use('/technicians', TechnicianRouter);
+Routes.use("/complaints", ComplaintRouter);
+Routes.use("/licensee", LicenseeRouter);
+Routes.use("/quotations", QuotationRouter);
 
 module.exports = Routes;

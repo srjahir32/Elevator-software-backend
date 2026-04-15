@@ -2,6 +2,7 @@ const { Technician } = require("../../Models/Technician.model");
 const { ResponseOk, ErrorHandler } = require("../../Utils/ResponseHandler");
 const { ActivityLog } = require("../../Models/Activitylog.model");
 const { Users } = require("../../Models/User.model");
+const { getTechnicianUsersForDropdown } = require("../../Utils/technicianUsers");
 
 const CreateTechnician = async (req, res) => {
     try {
@@ -41,10 +42,9 @@ const CreateTechnician = async (req, res) => {
 const GetAllTechnicians = async (req, res) => {
     try {
         const { branch_id } = req.query;
-        const filter = {};
-        if (branch_id) filter.branch_id = branch_id;
-
-        const technicians = await Technician.find(filter).sort({ createdAt: -1 });
+        const technicians = await getTechnicianUsersForDropdown({
+            branch_id: branch_id || undefined,
+        });
         return ResponseOk(res, 200, "Technicians retrieved successfully", technicians);
     } catch (error) {
         console.error("[GetAllTechnicians]", error);

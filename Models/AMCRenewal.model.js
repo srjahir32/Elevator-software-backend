@@ -15,7 +15,7 @@ const AMCRenewalSchema = new mongoose.Schema(
     original_contract_number: { type: String, required: true },
     new_contract_number: { type: String, required: true },
     renewed_at: { type: Date, default: Date.now },
-    renewed_by: { type: mongoose.Schema.Types.ObjectId, ref: "user", default: null },
+    renewed_by: { type: mongoose.Schema.Types.ObjectId, ref: "users", default: null },
   },
   { timestamps: true, versionKey: false }
 );

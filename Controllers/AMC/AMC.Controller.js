@@ -1,5 +1,5 @@
 const { AMC } = require("../../Models/AMC.model");
-const { Elevators } = require("../../Models/Project.model");
+const { Elevators, Project } = require("../../Models/Project.model");
 const { Users, User_Associate_With_Role, Roles } = require("../../Models/User.model");
 const { ResponseOk, ErrorHandler } = require("../../Utils/ResponseHandler");
 const { ActivityLog } = require("../../Models/Activitylog.model");
@@ -8,12 +8,48 @@ const mongoose = require("mongoose");
 
 const RENEWAL_DUE_DAYS = 30;
 
+/** Branch ObjectIds valid for Mongo $in */
+function toBranchObjectIds(branchIds) {
+  if (!branchIds || !branchIds.length) return [];
+  const out = [];
+  for (const b of branchIds) {
+    if (b == null) continue;
+    const s = String(b);
+    if (!mongoose.Types.ObjectId.isValid(s)) continue;
+    out.push(new mongoose.Types.ObjectId(s));
+  }
+  return out;
+}
+
+/**
+ * AMC.branch_id is sometimes null while the linked project has branch_id set.
+ * Branch-filtered lists should include those AMCs when the project belongs to the branch(es).
+ */
+async function projectIdsForBranches(branchIds) {
+  const bids = toBranchObjectIds(branchIds);
+  if (!bids.length) return [];
+  const rows = await Project.find({ branch_id: { $in: bids } }).select("_id").lean();
+  return rows.map((r) => r._id);
+}
+
+function amcBranchOrProjectMatch(branchIds, projectIds) {
+  const bids = toBranchObjectIds(branchIds);
+  if (!bids.length) return null;
+  const or = [{ branch_id: { $in: bids } }];
+  if (projectIds && projectIds.length) {
+    or.push({ project_id: { $in: projectIds } });
+  }
+  return { $or: or };
+}
+
 /**
  * Compute display status for UI (date-based, not stored).
  * Upcoming | Active | Renewal Due | Expired | Cancelled
  */
 function getDisplayStatus(amc) {
+  if (amc.amc_record_status === "Archived") return "Archived";
   if (amc.contract_status === "Cancelled") return "Cancelled";
+  if (amc.contract_status === "Completed") return "Expired";
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const start = amc.contract_start_date ? new Date(amc.contract_start_date) : null;
@@ -36,6 +72,21 @@ function attachDisplayStatus(amc) {
     amc.displayStatus = getDisplayStatus(amc);
   }
   return amc;
+}
+
+function matchActiveAmcRecord() {
+  return {
+    $nor: [{ amc_record_status: "Archived" }, { amc_record_status: "archived" }],
+  };
+}
+
+function mergeWithActiveAmcRecord(inner) {
+  const active = matchActiveAmcRecord();
+  if (!inner || typeof inner !== "object") return active;
+  if (inner.$and && Array.isArray(inner.$and)) {
+    return { $and: [...inner.$and, active] };
+  }
+  return { $and: [inner, active] };
 }
 
 // Helper function to update contract status based on payment and dates
@@ -135,7 +186,9 @@ const generateServiceSchedule = (startDate, endDate, frequency) => {
 
   const months = intervals[frequency] || 1;
 
-  while (currentDate <= end) {
+  // Use strict `< end` to avoid adding a boundary-extra visit
+  // (e.g. 1-year monthly should be 12 visits, not 13).
+  while (currentDate < end) {
     schedule.push({
       service_type: frequency,
       scheduled_date: new Date(currentDate),
@@ -143,6 +196,14 @@ const generateServiceSchedule = (startDate, endDate, frequency) => {
     });
 
     currentDate.setMonth(currentDate.getMonth() + months);
+  }
+
+  if (schedule.length === 0) {
+    schedule.push({
+      service_type: frequency,
+      scheduled_date: new Date(start),
+      service_status: "Pending",
+    });
   }
 
   return schedule;
@@ -173,20 +234,35 @@ const generatePaymentSchedule = (startDate, endDate, frequency, totalAmount) => 
   }
 
   const months = intervals[frequency] || 12;
-  const totalMonths = Math.ceil(
-    (end - start) / (1000 * 60 * 60 * 24 * 30)
-  );
-  const numberOfPayments = Math.ceil(totalMonths / months);
-  const amountPerPayment = totalAmount / numberOfPayments;
+  const paymentDates = [];
 
-  while (currentDate <= end) {
+  // Use strict `< end` to avoid duplicate boundary installment on exact tenures
+  // (e.g. 1-year annual should generate 1 payment, not 2).
+  while (currentDate < end) {
+    paymentDates.push(new Date(currentDate));
+    currentDate.setMonth(currentDate.getMonth() + months);
+  }
+
+  if (paymentDates.length === 0) {
+    paymentDates.push(new Date(start));
+  }
+
+  const numberOfPayments = paymentDates.length;
+  const roundedPerPayment =
+    Math.round((Number(totalAmount) / numberOfPayments) * 100) / 100;
+
+  let assigned = 0;
+  for (let i = 0; i < paymentDates.length; i++) {
+    const isLast = i === paymentDates.length - 1;
+    const amount = isLast
+      ? Math.round((Number(totalAmount) - assigned) * 100) / 100
+      : roundedPerPayment;
+    assigned += amount;
     schedule.push({
-      payment_date: new Date(currentDate),
-      amount: Math.round(amountPerPayment * 100) / 100,
+      payment_date: paymentDates[i],
+      amount,
       payment_status: "Pending",
     });
-
-    currentDate.setMonth(currentDate.getMonth() + months);
   }
 
   return schedule;
@@ -212,6 +288,10 @@ const CreateAMC = async (req, res) => {
       contract_amount,
       gst_amount,
       total_amount,
+      previous_contract_amount,
+      amc_payment_type,
+      include_gst,
+      gst_percentage,
       payment_frequency,
       service_frequency,
       auto_renewal,
@@ -220,7 +300,12 @@ const CreateAMC = async (req, res) => {
       terms_and_conditions,
       additional_notes,
       assigned_technician,
+      supervisor_id,
+      technician_ids,
+      branch_ids,
       branch_id,
+      lifts,
+      materials,
       service_schedule,
       payment_schedule,
       files,
@@ -382,8 +467,10 @@ const CreateAMC = async (req, res) => {
       contract_amount: contract_amount != null ? Number(contract_amount) : null,
       gst_amount: gst_amount != null ? Number(gst_amount) : 0,
       total_amount: totalAmountNum,
+      previous_contract_amount: previous_contract_amount != null ? Number(previous_contract_amount) : 0,
       payment_frequency: payment_frequency || "Annual",
       service_frequency: service_frequency || "Monthly",
+      amc_payment_type: amc_payment_type || "Paid",
       service_schedule: finalServiceSchedule,
       payment_schedule: finalPaymentSchedule,
       total_paid_amount: 0,
@@ -392,11 +479,20 @@ const CreateAMC = async (req, res) => {
       auto_renewal: auto_renewal || false,
       renewal_reminder_days: renewal_reminder_days != null ? Number(renewal_reminder_days) : 30,
       amc_type: amc_type || "Comprehensive",
+      include_gst: include_gst !== false,
+      gst_percentage: gst_percentage != null ? Number(gst_percentage) : 0,
       total_services_completed: 0,
       total_services_pending: finalServiceSchedule?.length || 0,
       terms_and_conditions,
       additional_notes,
-      assigned_technician,
+      assigned_technician:
+        assigned_technician ||
+        (Array.isArray(technician_ids) && technician_ids.length ? technician_ids[0] : null),
+      supervisor_id: supervisor_id || null,
+      technician_ids: Array.isArray(technician_ids) ? technician_ids : (technician_ids ? [technician_ids] : []),
+      branch_ids: Array.isArray(branch_ids) ? branch_ids : (branch_ids ? [branch_ids] : []),
+      lifts: Array.isArray(lifts) ? lifts : [],
+      materials: Array.isArray(materials) ? materials : [],
       branch_id,
       files: Array.isArray(files) ? files : [],
       type_of_elevator,
@@ -476,9 +572,11 @@ const ViewAMC = async (req, res) => {
       limit = 100,
       sortBy = "createdAt",
       sortOrder = "desc",
+      amcRecordStatus,
     } = req.query;
 
     const cleanBranchId = (branchId && branchId !== "null" && branchId !== "undefined") ? branchId : null;
+    const listRecordMode = String(amcRecordStatus || "active").toLowerCase();
 
     const matchStage = {};
 
@@ -490,8 +588,9 @@ const ViewAMC = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
 
-        if (role && role.name !== "Admin") {
+        if (role && !isAdminRole) {
           if (cleanBranchId) {
             const user = await Users.findById(req.auth.id);
             const isAssigned = user.branches.some(
@@ -499,7 +598,11 @@ const ViewAMC = async (req, res) => {
             );
 
             if (isAssigned) {
-              matchStage.branch_id = new mongoose.Types.ObjectId(cleanBranchId);
+              const pids = await projectIdsForBranches([cleanBranchId]);
+              const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+              if (br) {
+                matchStage.$and = [...(matchStage.$and || []), br];
+              }
             } else {
               return ErrorHandler(
                 res,
@@ -509,10 +612,19 @@ const ViewAMC = async (req, res) => {
             }
           } else {
             const user = await Users.findById(req.auth.id);
-            matchStage.branch_id = { $in: user.branches };
+            const branches = user.branches || [];
+            const pids = await projectIdsForBranches(branches);
+            const br = amcBranchOrProjectMatch(branches, pids);
+            if (br) {
+              matchStage.$and = [...(matchStage.$and || []), br];
+            }
           }
-        } else if (cleanBranchId) {
-          matchStage.branch_id = new mongoose.Types.ObjectId(cleanBranchId);
+        } else if (isAdminRole && cleanBranchId) {
+          const pids = await projectIdsForBranches([cleanBranchId]);
+          const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+          if (br) {
+            matchStage.$and = [...(matchStage.$and || []), br];
+          }
         }
       }
     }
@@ -561,6 +673,42 @@ const ViewAMC = async (req, res) => {
       if (minAmount) matchStage.total_amount.$gte = Number(minAmount);
       if (maxAmount) matchStage.total_amount.$lte = Number(maxAmount);
     }
+    const renewalLinks = await AMCRenewal.find({}, "original_amc_id").lean();
+    const renewedOriginalIds = renewalLinks
+      .map((r) => (r?.original_amc_id ? new mongoose.Types.ObjectId(String(r.original_amc_id)) : null))
+      .filter(Boolean);
+
+    let listMatch = { ...matchStage };
+    if (listRecordMode === "archived") {
+      listMatch = {
+        $and: [
+          listMatch,
+          {
+            $or: [
+              { amc_record_status: "Archived" },
+              { superseded_by_amc_id: { $exists: true, $ne: null } },
+              ...(renewedOriginalIds.length ? [{ _id: { $in: renewedOriginalIds } }] : []),
+            ],
+          },
+        ],
+      };
+    } else {
+      listMatch = {
+        $and: [
+          listMatch,
+          {
+            $nor: [{ amc_record_status: "Archived" }, { amc_record_status: "archived" }],
+          },
+          {
+            $or: [
+              { superseded_by_amc_id: { $exists: false } },
+              { superseded_by_amc_id: null },
+            ],
+          },
+          ...(renewedOriginalIds.length ? [{ _id: { $nin: renewedOriginalIds } }] : []),
+        ],
+      };
+    }
 
     const sortField = ["contract_start_date", "contract_end_date", "total_amount", "createdAt"].includes(sortBy) ? sortBy : "createdAt";
     const sortDir = sortOrder === "asc" ? 1 : -1;
@@ -569,7 +717,7 @@ const ViewAMC = async (req, res) => {
     const limitNum = Math.min(100, Math.max(1, Number(limit)));
 
     const pipeline = [
-      { $match: matchStage },
+      { $match: listMatch },
       {
         $lookup: {
           from: "elevators",
@@ -581,9 +729,55 @@ const ViewAMC = async (req, res) => {
       {
         $lookup: {
           from: "projects",
-          localField: "project_id",
-          foreignField: "_id",
+          let: { pid: "$project_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    { $ne: ["$$pid", null] },
+                    {
+                      $or: [
+                        { $eq: ["$_id", "$$pid"] },
+                        {
+                          $eq: [
+                            { $toString: "$_id" },
+                            { $toString: "$$pid" },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            { $limit: 1 },
+          ],
           as: "project",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "technician_ids",
+          foreignField: "_id",
+          as: "technician_users",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "assigned_technician",
+          foreignField: "_id",
+          as: "assigned_technician_user",
+        },
+      },
+      {
+        $lookup: {
+          from: "users",
+          localField: "supervisor_id",
+          foreignField: "_id",
+          as: "supervisor_user",
         },
       },
       { $unwind: { path: "$project", preserveNullAndEmptyArrays: true } },
@@ -614,16 +808,114 @@ const ViewAMC = async (req, res) => {
             }
           },
           project_name: { $ifNull: ["$project.site_name", "$external_project_name"] },
+          area: {
+            $let: {
+              vars: {
+                a: "$area",
+                p: "$project.area",
+              },
+              in: {
+                $let: {
+                  vars: {
+                    ta: { $trim: { input: { $ifNull: ["$$a", ""] } } },
+                    tp: { $trim: { input: { $ifNull: ["$$p", ""] } } },
+                  },
+                  in: {
+                    $cond: [
+                      { $gt: [{ $strLenCP: "$$ta" }, 0] },
+                      "$$ta",
+                      {
+                        $cond: [
+                          { $gt: [{ $strLenCP: "$$tp" }, 0] },
+                          "$$tp",
+                          null,
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          city: {
+            $let: {
+              vars: {
+                c: "$city",
+                p: "$project.city",
+              },
+              in: {
+                $let: {
+                  vars: {
+                    tc: { $trim: { input: { $ifNull: ["$$c", ""] } } },
+                    tp: { $trim: { input: { $ifNull: ["$$p", ""] } } },
+                  },
+                  in: {
+                    $cond: [
+                      { $gt: [{ $strLenCP: "$$tc" }, 0] },
+                      "$$tc",
+                      {
+                        $cond: [
+                          { $gt: [{ $strLenCP: "$$tp" }, 0] },
+                          "$$tp",
+                          null,
+                        ],
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+          technician_names_list: {
+            $reduce: {
+              input: {
+                $map: {
+                  input: { $ifNull: ["$technician_users", []] },
+                  as: "t",
+                  in: "$$t.name",
+                },
+              },
+              initialValue: "",
+              in: {
+                $cond: [
+                  { $eq: ["$$value", ""] },
+                  { $ifNull: ["$$this", ""] },
+                  {
+                    $cond: [
+                      { $eq: ["$$this", null] },
+                      "$$value",
+                      { $concat: ["$$value", ", ", "$$this"] },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          supervisor_name: {
+            $let: {
+              vars: { s: { $arrayElemAt: ["$supervisor_user", 0] } },
+              in: "$$s.name",
+            },
+          },
+          assigned_technician: {
+            $let: {
+              vars: { a: { $arrayElemAt: ["$assigned_technician_user", 0] } },
+              in: {
+                _id: "$$a._id",
+                name: "$$a.name",
+              },
+            },
+          },
         },
       },
-      { $project: { elevators: 0, project: 0 } },
+      { $project: { elevators: 0, project: 0, technician_users: 0, assigned_technician_user: 0, supervisor_user: 0 } },
       { $sort: { [sortField]: sortDir } },
       { $skip: skip },
       { $limit: limitNum },
     ];
 
     const countPipeline = [
-      { $match: matchStage },
+      { $match: listMatch },
       { $count: "total" },
     ];
     const [countResult] = await AMC.aggregate(countPipeline);
@@ -652,9 +944,113 @@ const ViewAMC = async (req, res) => {
   }
 };
 
+const ListServiceVisits = async (req, res) => {
+  try {
+    const {
+      branchId,
+      amcId,
+      serviceStatus,
+      scheduledFrom,
+      scheduledTo,
+      search,
+      page = 1,
+      limit = 50,
+      sortOrder = "desc",
+    } = req.query;
+
+    const amcQuery = {};
+    if (branchId && branchId !== "null" && branchId !== "undefined") {
+      amcQuery.branch_id = new mongoose.Types.ObjectId(branchId);
+    }
+    if (amcId && amcId !== "all") {
+      amcQuery._id = new mongoose.Types.ObjectId(amcId);
+    }
+
+    const amcs = await AMC.find(amcQuery)
+      .select("contract_number project_id external_project_name service_schedule")
+      .populate("project_id", "site_name")
+      .lean();
+
+    let rows = [];
+    for (const amc of amcs) {
+      const projectName = amc?.project_id?.site_name || amc?.external_project_name || "";
+      const schedule = Array.isArray(amc?.service_schedule) ? amc.service_schedule : [];
+      for (const s of schedule) {
+        rows.push({
+          amc_id: amc._id,
+          contract_number: amc.contract_number,
+          project_name: projectName,
+          scheduled_date: s?.scheduled_date || null,
+          service_status: s?.service_status || "Pending",
+          service_type: s?.service_type || null,
+          lift_label: s?.lift_label || null,
+          service_id: s?._id || null,
+        });
+      }
+    }
+
+    if (serviceStatus && serviceStatus !== "all") {
+      const set = new Set(
+        String(serviceStatus)
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+      );
+      rows = rows.filter((r) => set.has(String(r.service_status || "")));
+    }
+
+    if (scheduledFrom) {
+      const from = new Date(scheduledFrom);
+      rows = rows.filter((r) => r.scheduled_date && new Date(r.scheduled_date) >= from);
+    }
+    if (scheduledTo) {
+      const to = new Date(scheduledTo);
+      to.setHours(23, 59, 59, 999);
+      rows = rows.filter((r) => r.scheduled_date && new Date(r.scheduled_date) <= to);
+    }
+
+    if (search && String(search).trim() !== "") {
+      const q = String(search).toLowerCase();
+      rows = rows.filter((r) =>
+        String(r.contract_number || "").toLowerCase().includes(q) ||
+        String(r.project_name || "").toLowerCase().includes(q) ||
+        String(r.lift_label || "").toLowerCase().includes(q)
+      );
+    }
+
+    rows.sort((a, b) => {
+      const ta = a.scheduled_date ? new Date(a.scheduled_date).getTime() : 0;
+      const tb = b.scheduled_date ? new Date(b.scheduled_date).getTime() : 0;
+      return sortOrder === "asc" ? ta - tb : tb - ta;
+    });
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+    const total = rows.length;
+    const start = (pageNum - 1) * limitNum;
+    const data = rows.slice(start, start + limitNum);
+
+    return ResponseOk(res, 200, "Service visits retrieved successfully", {
+      data,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+    });
+  } catch (error) {
+    console.error("[ListServiceVisits]", error);
+    return ErrorHandler(res, 500, "Server error while retrieving service visits");
+  }
+};
+
 const GetAMCSummary = async (req, res) => {
   try {
-    const { branchId } = req.query;
+    const cleanBranchId =
+      req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined"
+        ? req.query.branchId
+        : null;
     const matchStage = {};
 
     if (req.auth && req.auth.id) {
@@ -663,34 +1059,71 @@ const GetAMCSummary = async (req, res) => {
       });
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
-          matchStage.branch_id = branchId
-            ? (user.branches.some((b) => b.toString() === branchId) ? new mongoose.Types.ObjectId(branchId) : null)
-            : { $in: user.branches };
-        } else if (branchId) {
-          matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+          if (cleanBranchId) {
+            const isAssigned = user.branches.some((b) => b.toString() === cleanBranchId);
+            if (!isAssigned) {
+              return ErrorHandler(res, 403, "You are not assigned to this branch");
+            }
+            const pids = await projectIdsForBranches([cleanBranchId]);
+            const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+            if (br) matchStage.$and = [...(matchStage.$and || []), br];
+          } else {
+            const branches = user.branches || [];
+            if (!branches.length) {
+              return ResponseOk(res, 200, "AMC summary", {
+                total: 0,
+                active: 0,
+                expired: 0,
+                renewalDue: 0,
+                archived: 0,
+              });
+            }
+            const pids = await projectIdsForBranches(branches);
+            const br = amcBranchOrProjectMatch(branches, pids);
+            if (br) matchStage.$and = [...(matchStage.$and || []), br];
+          }
+        } else if (isAdminRole && cleanBranchId) {
+          const pids = await projectIdsForBranches([cleanBranchId]);
+          const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+          if (br) matchStage.$and = [...(matchStage.$and || []), br];
         }
       }
-    }
-    if (matchStage.branch_id === null) {
-      return ResponseOk(res, 200, "AMC summary", { total: 0, active: 0, expired: 0, renewalDue: 0 });
     }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayEnd = new Date(today);
     todayEnd.setDate(todayEnd.getDate() + RENEWAL_DUE_DAYS);
+    const renewalLinks = await AMCRenewal.find({}, "original_amc_id").lean();
+    const renewedOriginalIds = renewalLinks
+      .map((r) => (r?.original_amc_id ? new mongoose.Types.ObjectId(String(r.original_amc_id)) : null))
+      .filter(Boolean);
 
-    const [total, active, expired, renewalDue] = await Promise.all([
-      AMC.countDocuments(matchStage),
+    const activeRecordsFilter = {
+      $and: [
+        mergeWithActiveAmcRecord({ ...matchStage }),
+        {
+          $or: [
+            { superseded_by_amc_id: { $exists: false } },
+            { superseded_by_amc_id: null },
+          ],
+        },
+        ...(renewedOriginalIds.length ? [{ _id: { $nin: renewedOriginalIds } }] : []),
+      ],
+    };
+
+    const [total, active, expired, renewalDue, archived] = await Promise.all([
+      AMC.countDocuments(activeRecordsFilter),
       AMC.countDocuments({
-        ...matchStage,
+        ...activeRecordsFilter,
         contract_status: "Active",
         contract_end_date: { $gt: todayEnd },
       }),
       AMC.countDocuments({
-        ...matchStage,
+        ...activeRecordsFilter,
         $or: [
           { contract_end_date: { $lt: today } },
           { contract_status: "Expired" },
@@ -698,9 +1131,17 @@ const GetAMCSummary = async (req, res) => {
         ],
       }),
       AMC.countDocuments({
-        ...matchStage,
+        ...activeRecordsFilter,
         contract_status: "Active",
         contract_end_date: { $gt: today, $lte: todayEnd },
+      }),
+      AMC.countDocuments({
+        ...matchStage,
+        $or: [
+          { amc_record_status: "Archived" },
+          { superseded_by_amc_id: { $exists: true, $ne: null } },
+          ...(renewedOriginalIds.length ? [{ _id: { $in: renewedOriginalIds } }] : []),
+        ],
       }),
     ]);
 
@@ -709,6 +1150,7 @@ const GetAMCSummary = async (req, res) => {
       active,
       expired,
       renewalDue,
+      archived,
     });
   } catch (error) {
     console.error("[GetAMCSummary]", error);
@@ -734,7 +1176,8 @@ const GetAMCById = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -745,7 +1188,12 @@ const GetAMCById = async (req, res) => {
     const amc = await AMC.findOne(query)
       .populate("elevator_ids", "elevator_name type_of_elevator")
       .populate("project_id", "site_name site_address client_name")
-      .populate("branch_id", "name");
+      .populate("branch_id", "name")
+      .populate("supervisor_id", "name email contact_number")
+      .populate("technician_ids", "name email contact_number")
+      .populate("assigned_technician", "name email contact_number")
+      .populate("previous_amc_id", "contract_number contract_start_date contract_end_date amc_record_status")
+      .populate("superseded_by_amc_id", "contract_number contract_start_date contract_end_date amc_record_status");
 
     if (!amc) {
       return ErrorHandler(res, 404, "AMC contract not found or access denied");
@@ -792,7 +1240,8 @@ const UpdateAMC = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -808,6 +1257,10 @@ const UpdateAMC = async (req, res) => {
       );
     }
 
+    if (checkAMC.amc_record_status === "Archived") {
+      return ErrorHandler(res, 403, "Archived AMC contracts cannot be edited.");
+    }
+
     const allowedFields = [
       "client_name",
       "client_email",
@@ -819,14 +1272,21 @@ const UpdateAMC = async (req, res) => {
       "contract_amount",
       "gst_amount",
       "total_amount",
+      "previous_contract_amount",
       "payment_frequency",
       "service_frequency",
       "auto_renewal",
       "renewal_reminder_days",
       "amc_type",
+      "amc_payment_type",
       "terms_and_conditions",
       "additional_notes",
       "assigned_technician",
+      "supervisor_id",
+      "technician_ids",
+      "branch_ids",
+      "lifts",
+      "materials",
       "technician_contact",
       "emergency_contact_name",
       "emergency_contact_number",
@@ -872,6 +1332,7 @@ const UpdateAMC = async (req, res) => {
       "rated_load",
       "cabin_height",
       "gst_percentage",
+      "include_gst",
     ];
 
 
@@ -1049,7 +1510,8 @@ const UpdateServiceSchedule = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -1063,6 +1525,10 @@ const UpdateServiceSchedule = async (req, res) => {
         404,
         "AMC contract not found or unauthorized"
       );
+    }
+
+    if (amc.amc_record_status === "Archived") {
+      return ErrorHandler(res, 403, "Service schedule cannot be changed for an archived AMC.");
     }
 
     const serviceIndex = amc.service_schedule.findIndex(
@@ -1154,7 +1620,8 @@ const UpdatePaymentSchedule = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -1168,6 +1635,10 @@ const UpdatePaymentSchedule = async (req, res) => {
         404,
         "AMC contract not found or unauthorized"
       );
+    }
+
+    if (amc.amc_record_status === "Archived") {
+      return ErrorHandler(res, 403, "Payment schedule cannot be changed for an archived AMC.");
     }
 
     const paymentIndex = amc.payment_schedule.findIndex(
@@ -1237,7 +1708,17 @@ const RenewAMC = async (req, res) => {
     }
 
     const { amcId } = req.query;
-    const { new_start_date, contract_duration_months } = req.body || {};
+    const {
+      new_start_date,
+      contract_start_date,
+      contract_end_date,
+      contract_duration_months,
+      previous_contract_amount,
+      contract_amount,
+      gst_amount,
+      total_amount,
+      include_gst,
+    } = req.body || {};
 
     if (!amcId) {
       return ErrorHandler(res, 400, "AMC ID is required");
@@ -1250,7 +1731,8 @@ const RenewAMC = async (req, res) => {
       });
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -1264,10 +1746,29 @@ const RenewAMC = async (req, res) => {
       return ErrorHandler(res, 404, "AMC contract not found or access denied");
     }
 
-    const startDate = new_start_date ? new Date(new_start_date) : new Date();
-    const durationMonths = Number(contract_duration_months || oldAMC.contract_duration_months || 12);
-    const endDate = new Date(startDate);
-    endDate.setMonth(endDate.getMonth() + durationMonths);
+    if (oldAMC.amc_record_status === "Archived") {
+      return ErrorHandler(res, 400, "Archived AMC contracts cannot be renewed.");
+    }
+
+    if (oldAMC.contract_status === "Cancelled") {
+      return ErrorHandler(
+        res,
+        400,
+        "Cancelled contracts cannot be renewed. Open the current active AMC from the list."
+      );
+    }
+
+    const startDate = contract_start_date
+      ? new Date(contract_start_date)
+      : new_start_date
+        ? new Date(new_start_date)
+        : new Date();
+    let endDate = contract_end_date ? new Date(contract_end_date) : null;
+    let durationMonths = Number(contract_duration_months || oldAMC.contract_duration_months || 12);
+    if (!endDate || Number.isNaN(endDate.getTime())) {
+      endDate = new Date(startDate);
+      endDate.setMonth(endDate.getMonth() + durationMonths);
+    }
 
     const newContractNumber = await generateContractNumber();
 
@@ -1280,52 +1781,115 @@ const RenewAMC = async (req, res) => {
       startDate,
       endDate,
       oldAMC.payment_frequency || "Annual",
-      oldAMC.total_amount || 0
+      total_amount != null ? Number(total_amount) : oldAMC.total_amount || 0
     );
+
+    const plainRefId = (ref) => {
+      if (ref == null) return null;
+      if (typeof ref === "object" && ref._id != null) return ref._id;
+      return ref;
+    };
+    const plainRefIdArray = (arr) =>
+      Array.isArray(arr) ? arr.map((x) => plainRefId(x)).filter((id) => id != null) : [];
+
+    const cloneLiftLines = (lifts) => {
+      if (!Array.isArray(lifts)) return [];
+      return lifts.map((l) => {
+        const o = l && typeof l.toObject === "function" ? l.toObject() : { ...(l || {}) };
+        return {
+          floors: o.floors != null ? Number(o.floors) : 0,
+          lift_name: o.lift_name != null ? String(o.lift_name) : "",
+          maker: o.maker != null ? String(o.maker) : "",
+          operation_type: o.operation_type === "Manual" ? "Manual" : "Automatic",
+          amount_with_material: o.amount_with_material != null ? Number(o.amount_with_material) : 0,
+          amount_without_material: o.amount_without_material != null ? Number(o.amount_without_material) : 0,
+        };
+      });
+    };
+
+    const cloneMaterialLines = (materials) => {
+      if (!Array.isArray(materials)) return [];
+      return materials.map((m) => {
+        const o = m && typeof m.toObject === "function" ? m.toObject() : { ...(m || {}) };
+        return {
+          lift_index: o.lift_index != null ? Number(o.lift_index) : null,
+          lift_id: plainRefId(o.lift_id) || null,
+          name: o.name != null ? String(o.name) : "",
+          quantity: o.quantity != null ? Number(o.quantity) : 1,
+          price: o.price != null ? Number(o.price) : 0,
+        };
+      });
+    };
+
+    const elevatorIdsPlain = plainRefIdArray(oldAMC.elevator_ids);
+    const projectIdPlain = plainRefId(oldAMC.project_id);
+    const supervisorIdPlain = plainRefId(oldAMC.supervisor_id);
+    const technicianIdsPlain = plainRefIdArray(oldAMC.technician_ids);
+    const branchIdsPlain = plainRefIdArray(oldAMC.branch_ids);
 
     const newAMC = await AMC.create({
       contract_number: newContractNumber,
-      elevator_ids: oldAMC.elevator_ids,
+      elevator_ids: elevatorIdsPlain,
       external_elevator_names: oldAMC.external_elevator_names,
       is_external: oldAMC.is_external,
       external_project_name: oldAMC.external_project_name,
-      project_id: oldAMC.project_id,
+      project_id: projectIdPlain,
       client_name: oldAMC.client_name,
       client_email: oldAMC.client_email,
       client_mobile: oldAMC.client_mobile,
       client_address: oldAMC.client_address,
+      area: oldAMC.area,
+      city: oldAMC.city,
+      agreement_no: oldAMC.agreement_no,
       contract_start_date: startDate,
       contract_end_date: endDate,
       contract_duration_months: durationMonths,
-      contract_amount: oldAMC.contract_amount,
-      gst_amount: oldAMC.gst_amount,
-      total_amount: oldAMC.total_amount,
+      contract_amount: contract_amount != null ? Number(contract_amount) : oldAMC.contract_amount,
+      gst_amount: gst_amount != null ? Number(gst_amount) : oldAMC.gst_amount,
+      total_amount: total_amount != null ? Number(total_amount) : oldAMC.total_amount,
+      gst_percentage: oldAMC.gst_percentage != null ? Number(oldAMC.gst_percentage) : 0,
+      include_gst: typeof include_gst === "boolean" ? include_gst : oldAMC.include_gst,
+      amc_payment_type: oldAMC.amc_payment_type || "Paid",
+      previous_contract_amount:
+        previous_contract_amount != null
+          ? Number(previous_contract_amount)
+          : (oldAMC.contract_amount != null ? Number(oldAMC.contract_amount) : 0),
       payment_frequency: oldAMC.payment_frequency,
       service_frequency: oldAMC.service_frequency,
       service_schedule: newSchedule,
       payment_schedule: newPaymentSchedule,
       total_paid_amount: 0,
-      remaining_amount: oldAMC.total_amount,
+      remaining_amount: total_amount != null ? Number(total_amount) : oldAMC.total_amount,
       contract_status: "Active",
+      amc_record_status: "Active",
+      previous_amc_id: oldAMC._id,
+      superseded_by_amc_id: null,
       auto_renewal: oldAMC.auto_renewal,
       renewal_reminder_days: oldAMC.renewal_reminder_days,
       amc_type: oldAMC.amc_type,
       terms_and_conditions: oldAMC.terms_and_conditions,
       additional_notes: oldAMC.additional_notes,
-      assigned_technician: oldAMC.assigned_technician,
+      supervisor_id: supervisorIdPlain,
+      technician_ids: technicianIdsPlain,
+      assigned_technician: plainRefId(oldAMC.assigned_technician),
       technician_contact: oldAMC.technician_contact,
+      lifts: cloneLiftLines(oldAMC.lifts),
+      materials: cloneMaterialLines(oldAMC.materials),
+      branch_ids: branchIdsPlain,
       emergency_contact_name: oldAMC.emergency_contact_name,
       emergency_contact_number: oldAMC.emergency_contact_number,
       warranty_period_months: oldAMC.warranty_period_months,
       warranty_start_date: oldAMC.warranty_start_date,
       warranty_end_date: oldAMC.warranty_end_date,
       service_reminder_days: oldAMC.service_reminder_days,
-      branch_id: oldAMC.branch_id,
+      branch_id: plainRefId(oldAMC.branch_id) || oldAMC.branch_id,
       total_services_completed: 0,
       total_services_pending: newSchedule.length,
     });
 
     oldAMC.contract_status = "Completed";
+    oldAMC.amc_record_status = "Archived";
+    oldAMC.superseded_by_amc_id = newAMC._id;
     await oldAMC.save();
 
     await AMCRenewal.create({
@@ -1333,7 +1897,7 @@ const RenewAMC = async (req, res) => {
       renewed_amc_id: newAMC._id,
       original_contract_number: oldAMC.contract_number,
       new_contract_number: newContractNumber,
-      renewed_by: req.auth?.id || null,
+      renewed_by: req.auth?.id ? new mongoose.Types.ObjectId(req.auth.id) : null,
     });
 
     const user_details = await Users.findById(req.auth?.id);
@@ -1381,7 +1945,10 @@ const GetRenewalHistory = async (req, res) => {
 
 const GetAMCDashboardStats = async (req, res) => {
   try {
-    const { branchId } = req.query;
+    const cleanBranchId =
+      req.query.branchId && req.query.branchId !== "null" && req.query.branchId !== "undefined"
+        ? req.query.branchId
+        : null;
     const matchStage = {};
     if (req.auth?.id) {
       const userRole = await User_Associate_With_Role.findOne({
@@ -1389,22 +1956,36 @@ const GetAMCDashboardStats = async (req, res) => {
       });
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
-          matchStage.branch_id = branchId
-            ? (user.branches.some((b) => b.toString() === branchId) ? new mongoose.Types.ObjectId(branchId) : null)
-            : { $in: user.branches };
-        } else if (branchId) {
-          matchStage.branch_id = new mongoose.Types.ObjectId(branchId);
+          if (cleanBranchId) {
+            const isAssigned = user.branches.some((b) => b.toString() === cleanBranchId);
+            if (!isAssigned) {
+              return ErrorHandler(res, 403, "You are not assigned to this branch");
+            }
+            const pids = await projectIdsForBranches([cleanBranchId]);
+            const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+            if (br) matchStage.$and = [...(matchStage.$and || []), br];
+          } else {
+            const branches = user.branches || [];
+            if (!branches.length) {
+              return ResponseOk(res, 200, "AMC dashboard stats", {
+                activeAMCCount: 0,
+                expiringSoonCount: 0,
+                monthlyRevenue: 0,
+              });
+            }
+            const pids = await projectIdsForBranches(branches);
+            const br = amcBranchOrProjectMatch(branches, pids);
+            if (br) matchStage.$and = [...(matchStage.$and || []), br];
+          }
+        } else if (isAdminRole && cleanBranchId) {
+          const pids = await projectIdsForBranches([cleanBranchId]);
+          const br = amcBranchOrProjectMatch([cleanBranchId], pids);
+          if (br) matchStage.$and = [...(matchStage.$and || []), br];
         }
       }
-    }
-    if (matchStage.branch_id === null) {
-      return ResponseOk(res, 200, "AMC dashboard stats", {
-        activeAMCCount: 0,
-        expiringSoonCount: 0,
-        monthlyRevenue: 0,
-      });
     }
 
     const today = new Date();
@@ -1415,19 +1996,40 @@ const GetAMCDashboardStats = async (req, res) => {
     const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     endOfMonth.setHours(23, 59, 59, 999);
 
+    const renewalLinksDash = await AMCRenewal.find({}, "original_amc_id").lean();
+    const renewedOriginalIdsDash = renewalLinksDash
+      .map((r) => (r?.original_amc_id ? new mongoose.Types.ObjectId(String(r.original_amc_id)) : null))
+      .filter(Boolean);
+
+    const activeRecordsFilterDash = {
+      $and: [
+        mergeWithActiveAmcRecord({ ...matchStage }),
+        {
+          $or: [
+            { superseded_by_amc_id: { $exists: false } },
+            { superseded_by_amc_id: null },
+          ],
+        },
+        ...(renewedOriginalIdsDash.length ? [{ _id: { $nin: renewedOriginalIdsDash } }] : []),
+      ],
+    };
+
     const [activeAMCCount, expiringSoonCount, amcsWithPayments] = await Promise.all([
       AMC.countDocuments({
-        ...matchStage,
+        ...activeRecordsFilterDash,
         contract_status: "Active",
         contract_end_date: { $gt: today },
       }),
       AMC.countDocuments({
-        ...matchStage,
+        ...activeRecordsFilterDash,
         contract_status: "Active",
         contract_end_date: { $gt: today, $lte: todayEnd },
       }),
       AMC.find(
-        { ...matchStage, "payment_schedule.paid_date": { $gte: startOfMonth, $lte: endOfMonth } },
+        {
+          ...activeRecordsFilterDash,
+          "payment_schedule.paid_date": { $gte: startOfMonth, $lte: endOfMonth },
+        },
         { payment_schedule: 1 }
       ).lean(),
     ]);
@@ -1455,6 +2057,32 @@ const GetAMCDashboardStats = async (req, res) => {
   }
 };
 
+const UploadAMCDocuments = async (req, res) => {
+  try {
+    const ok = await canCreateOrEditAMC(req);
+    if (!ok) {
+      return ErrorHandler(res, 403, "Only Admin and Supervisor can upload AMC documents");
+    }
+    const uploaded = req.files || [];
+    if (!Array.isArray(uploaded) || uploaded.length === 0) {
+      return ErrorHandler(res, 400, "No files uploaded");
+    }
+    const data = uploaded.map((file) => {
+      const mime = file.mimetype || "";
+      let fileType = "image";
+      if (mime.startsWith("application/pdf")) fileType = "pdf";
+      else if (mime.startsWith("video/")) fileType = "video";
+      const sub = fileType === "pdf" ? "pdfs" : fileType === "video" ? "videos" : "images";
+      const fileUrl = `/public/uploads/${sub}/${file.filename}`;
+      return { fileType, fileUrl };
+    });
+    return ResponseOk(res, 200, "Files uploaded", data);
+  } catch (error) {
+    console.error("[UploadAMCDocuments]", error);
+    return ErrorHandler(res, 500, error.message || "Server error while uploading files");
+  }
+};
+
 const DeleteAMC = async (req, res) => {
   try {
     const { amcId } = req.query;
@@ -1474,7 +2102,8 @@ const DeleteAMC = async (req, res) => {
 
       if (userRole) {
         const role = await Roles.findOne({ id: userRole.role_id });
-        if (role && role.name !== "Admin") {
+        const isAdminRole = role && /^admin$/i.test(String(role.name || "").trim());
+        if (role && !isAdminRole) {
           const user = await Users.findById(req.auth.id);
           query.branch_id = { $in: user.branches || [] };
         }
@@ -1532,6 +2161,7 @@ const DeleteAMC = async (req, res) => {
 module.exports = {
   CreateAMC,
   ViewAMC,
+  ListServiceVisits,
   GetAMCSummary,
   GetAMCById,
   UpdateAMC,
@@ -1541,5 +2171,6 @@ module.exports = {
   GetRenewalHistory,
   GetAMCDashboardStats,
   DeleteAMC,
+  UploadAMCDocuments,
 };
 

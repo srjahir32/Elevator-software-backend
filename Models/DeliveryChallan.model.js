@@ -34,14 +34,21 @@ const DeliveryChallanSchema = new mongoose.Schema(
         items: [DeliveryChallanItemSchema],
         branch_id: { type: mongoose.Schema.Types.ObjectId, ref: "branch" },
         created_by: { type: mongoose.Schema.Types.ObjectId, ref: "user" },
+        /** AMC-linked challan (frontend sends amc_id + lift_indices) */
+        amc_id: { type: mongoose.Schema.Types.ObjectId, ref: "amc", default: null },
+        challan_type: { type: String, default: "Material Delivery" },
+        lift_indices: [{ type: Number }],
+        lift_labels: [{ type: String }],
+        service_schedule_id: { type: mongoose.Schema.Types.ObjectId, default: null },
+        technician_ids: [{ type: mongoose.Schema.Types.ObjectId, ref: "users" }],
     },
     { timestamps: true, versionKey: false }
 );
 
-DeliveryChallanSchema.index({ challan_number: 1 });
 DeliveryChallanSchema.index({ project_id: 1 });
 DeliveryChallanSchema.index({ elevator_ids: 1 });
 DeliveryChallanSchema.index({ status: 1 });
+DeliveryChallanSchema.index({ amc_id: 1 });
 
 const DeliveryChallan = mongoose.model("delivery_challan", DeliveryChallanSchema);
 

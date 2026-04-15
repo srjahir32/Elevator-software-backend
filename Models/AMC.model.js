@@ -37,6 +37,10 @@ const ServiceScheduleSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    lift_label: {
+      type: String,
+      default: null,
+    },
     maintenance_checklist: [
       {
         item: {
@@ -137,6 +141,67 @@ const PaymentScheduleSchema = new mongoose.Schema(
   { _id: true, timestamps: true }
 );
 
+/** Snapshot of a closed term when renewing in-place (same AMC document, new contract period). */
+const RenewalTermSnapshotSchema = new mongoose.Schema(
+  {
+    contract_number: { type: String, required: true },
+    contract_start_date: { type: Date, default: null },
+    contract_end_date: { type: Date, default: null },
+    contract_duration_months: { type: Number, default: null },
+    contract_amount: { type: Number, default: null },
+    gst_amount: { type: Number, default: null },
+    total_amount: { type: Number, default: null },
+    total_paid_amount: { type: Number, default: 0 },
+    remaining_amount: { type: Number, default: null },
+    total_services_completed: { type: Number, default: 0 },
+    total_services_pending: { type: Number, default: 0 },
+    payment_frequency: { type: String, default: null },
+    service_frequency: { type: String, default: null },
+    service_schedule: [ServiceScheduleSchema],
+    payment_schedule: [PaymentScheduleSchema],
+    renewed_at: { type: Date, default: Date.now },
+    renewed_by: { type: mongoose.Schema.Types.ObjectId, ref: "users", default: null },
+    /** Client, lifts, notes, etc. — full context for “Term detail” UI */
+    extra: { type: mongoose.Schema.Types.Mixed, default: null },
+  },
+  { _id: true, timestamps: false }
+);
+
+/** Per-lift pricing lines (external / multi-lift AMC form) */
+const AMCLiftLineSchema = new mongoose.Schema(
+  {
+    floors: { type: Number, default: 0 },
+    /** Optional display name (e.g. "Passenger A"); service schedule uses this when set */
+    lift_name: { type: String, default: "", trim: true },
+    maker: { type: String, default: "" },
+    operation_type: {
+      type: String,
+      enum: ["Automatic", "Manual"],
+      default: "Automatic",
+    },
+    amount_with_material: { type: Number, default: 0 },
+    amount_without_material: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const AMCMaterialLineSchema = new mongoose.Schema(
+  {
+    lift_index: { type: Number, default: null },
+    /** Optional elevator ref when lift lines are empty or order differs from lifts[] */
+    lift_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "elevator",
+      required: false,
+      default: null,
+    },
+    name: { type: String, required: true },
+    quantity: { type: Number, default: 1 },
+    price: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 // AMC Schema
 const AMCSchema = new mongoose.Schema(
   {
@@ -182,6 +247,42 @@ const AMCSchema = new mongoose.Schema(
       type: String,
       required: false,
     },
+    city: {
+      type: String,
+      default: null,
+    },
+    area: {
+      type: String,
+      default: null,
+    },
+    agreement_no: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    supervisor_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "users",
+      default: null,
+    },
+    technician_ids: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "users",
+      },
+    ],
+    branch_ids: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "branch",
+      },
+    ],
+    lifts: [AMCLiftLineSchema],
+    materials: [AMCMaterialLineSchema],
+    previous_contract_amount: {
+      type: Number,
+      default: 0,
+    },
     contract_start_date: {
       type: Date,
     },
@@ -197,6 +298,12 @@ const AMCSchema = new mongoose.Schema(
       enum: ["Comprehensive", "Non-Comprehensive"],
       default: "Comprehensive",
     },
+    /** Billing: Paid AMC uses contract/total amounts; Free AMC stores zero amounts. */
+    amc_payment_type: {
+      type: String,
+      enum: ["Free", "Paid"],
+      default: "Paid",
+    },
     contract_amount: {
       type: Number,
     },
@@ -207,6 +314,11 @@ const AMCSchema = new mongoose.Schema(
     gst_percentage: {
       type: Number,
       default: 0,
+    },
+    /** When false, contract totals exclude GST (gst_amount 0, total = contract_amount). */
+    include_gst: {
+      type: Boolean,
+      default: true,
     },
     total_amount: {
       type: Number,
@@ -353,9 +465,32 @@ const AMCSchema = new mongoose.Schema(
       enum: ["Active", "Expired", "Cancelled", "Pending", "Completed", "Draft"],
       default: "Pending",
     },
+    /** Active = current AMC row; Archived = superseded when renewed into a new AMC document. */
+    amc_record_status: {
+      type: String,
+      enum: ["Active", "Archived"],
+      default: "Active",
+    },
+    /** Set on the new AMC created by renewal — points to the archived predecessor. */
+    previous_amc_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "amc",
+      default: null,
+    },
+    /** Set on the archived AMC — points to the replacement active AMC. */
+    superseded_by_amc_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "amc",
+      default: null,
+    },
     renewal_date: {
       type: Date,
       default: null,
+    },
+    /** Past contract terms (snapshots) after in-place renewal — same AMC id, no duplicate list row. */
+    renewal_history: {
+      type: [RenewalTermSnapshotSchema],
+      default: [],
     },
     auto_renewal: {
       type: Boolean,
@@ -375,7 +510,7 @@ const AMCSchema = new mongoose.Schema(
     },
     assigned_technician: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "technician",
+      ref: "users",
       default: null,
     },
     technician_contact: {
@@ -451,8 +586,7 @@ const AMCSchema = new mongoose.Schema(
   }
 );
 
-// Indexes for better query performance
-AMCSchema.index({ contract_number: 1 });
+// Indexes for better query performance (contract_number: unique on field already indexes it)
 AMCSchema.index({ elevator_id: 1 });
 AMCSchema.index({ project_id: 1 });
 AMCSchema.index({ contract_start_date: 1 });
@@ -461,6 +595,8 @@ AMCSchema.index({ contract_status: 1 });
 AMCSchema.index({ branch_id: 1 });
 AMCSchema.index({ branch_id: 1, contract_status: 1 });
 AMCSchema.index({ branch_id: 1, contract_end_date: 1 });
+AMCSchema.index({ project_id: 1, amc_record_status: 1 });
+AMCSchema.index({ amc_record_status: 1, contract_end_date: 1 });
 
 // Pre-save middleware to calculate remaining amount and recalculate total_paid_amount
 AMCSchema.pre("save", function (next) {
