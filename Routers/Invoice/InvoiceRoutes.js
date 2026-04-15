@@ -7,7 +7,7 @@ const {
     MarkInvoiceSent,
     UpdateInvoiceStatus,
     AddPayment
-} = require("../../Controllers/Invoice/Invoice.Controller");
+} = require("../../Controllers/Invoice/Invoice.controller");
 
 const InvoiceRouter = Router();
 

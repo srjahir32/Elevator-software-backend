@@ -8,7 +8,7 @@ const {
     UpdateChallan,
     UpdateChallanStatus,
     MarkDelivered
-} = require("../../Controllers/DeliveryChallan/DeliveryChallan.Controller");
+} = require("../../Controllers/DeliveryChallan/DeliveryChallan.controller");
 
 const DeliveryChallanRouter = Router();
 
